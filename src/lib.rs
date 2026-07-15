@@ -254,9 +254,26 @@ impl CommandHandler for LoadHandler {
         let total_blocks: usize = schematic
             .regions
             .iter()
-            .map(|r| {
-                let s = r.abs_size();
-                (s[0] * s[1] * s[2]) as usize
+            .enumerate()
+            .map(|(i, r)| {
+                let [sx, sy, sz] = r.abs_size();
+                let pm = &palette_map[i];
+                let mut count = 0usize;
+                for y in 0..sy {
+                    for z in 0..sz {
+                        for x in 0..sx {
+                            let idx = r.get_palette_index(x, y, z) as usize;
+                            if idx < pm.len() {
+                                if let Some(state_id) = pm[idx] {
+                                    if state_id != 0 {
+                                        count += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                count
             })
             .sum();
 
