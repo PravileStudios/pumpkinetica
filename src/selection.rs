@@ -5,10 +5,15 @@ use pumpkin_plugin_api::events::{
 };
 use pumpkin_plugin_api::Server;
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use crate::{
     LOADED_SCHEMATICS, PLAYER_CLIPBOARDS, PLAYER_HISTORIES, PLAYER_SELECTIONS, get_config,
     msg_info, normalize_item_name,
 };
+
+static WAND_DEBOUNCE: Mutex<Option<HashMap<String, (bool, BlockPos)>>> = Mutex::new(None);
 
 pub(crate) struct Selection {
     pub pos1: BlockPos,
@@ -72,27 +77,43 @@ impl EventHandler<PlayerInteractEvent> for WandInteractHandler {
         let is_pos2 = matches!(event.action, InteractAction::RightClickBlock);
 
         if is_pos1 || is_pos2 {
-            let mut sel = PLAYER_SELECTIONS.lock().unwrap();
-            if let Some(ref mut map) = *sel {
-                let player_name = event.player.get_name();
-                let entry = map.entry(player_name).or_insert(Selection {
-                    pos1: clicked_pos,
-                    pos2: clicked_pos,
+            let player_name = event.player.get_name();
+
+            let mut debounce = WAND_DEBOUNCE.lock().unwrap();
+            let debounce_map = debounce.get_or_insert_with(HashMap::new);
+            let is_duplicate = debounce_map
+                .get(&player_name)
+                .is_some_and(|(last_p1, last_pos)| {
+                    *last_p1 == is_pos1
+                        && last_pos.x == clicked_pos.x
+                        && last_pos.y == clicked_pos.y
+                        && last_pos.z == clicked_pos.z
                 });
-                let label = if is_pos1 {
-                    entry.pos1 = clicked_pos;
-                    "Pos1"
-                } else {
-                    entry.pos2 = clicked_pos;
-                    "Pos2"
-                };
-                event.player.send_system_message(
-                    msg_info(&format!(
-                        "{label} set to ({}, {}, {})",
-                        clicked_pos.x, clicked_pos.y, clicked_pos.z
-                    )),
-                    false,
-                );
+            debounce_map.insert(player_name.clone(), (is_pos1, clicked_pos));
+            drop(debounce);
+
+            if !is_duplicate {
+                let mut sel = PLAYER_SELECTIONS.lock().unwrap();
+                if let Some(ref mut map) = *sel {
+                    let entry = map.entry(player_name).or_insert(Selection {
+                        pos1: clicked_pos,
+                        pos2: clicked_pos,
+                    });
+                    let label = if is_pos1 {
+                        entry.pos1 = clicked_pos;
+                        "Pos1"
+                    } else {
+                        entry.pos2 = clicked_pos;
+                        "Pos2"
+                    };
+                    event.player.send_system_message(
+                        msg_info(&format!(
+                            "{label} set to ({}, {}, {})",
+                            clicked_pos.x, clicked_pos.y, clicked_pos.z
+                        )),
+                        false,
+                    );
+                }
             }
             event.cancelled = true;
         }
@@ -148,6 +169,9 @@ impl EventHandler<PlayerLeaveEvent> for PlayerCleanupHandler {
             map.remove(&name);
         }
         if let Some(ref mut map) = *LOADED_SCHEMATICS.lock().unwrap() {
+            map.remove(&name);
+        }
+        if let Some(ref mut map) = *WAND_DEBOUNCE.lock().unwrap() {
             map.remove(&name);
         }
 
