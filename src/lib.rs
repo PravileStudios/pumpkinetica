@@ -436,8 +436,7 @@ fn schedule_paste(
 
     let flags = BlockFlags::FORCE_STATE
         | BlockFlags::SKIP_DROPS
-        | BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
-        | BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
+        | BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT;
 
     let id = pumpkin_plugin_api::scheduler::schedule_repeating_task(0, 1, move |server| {
         let world = match server.get_world_by_name(&dimension) {
