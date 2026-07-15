@@ -13,7 +13,7 @@ use crate::{
     msg_info, normalize_item_name,
 };
 
-static WAND_DEBOUNCE: Mutex<Option<HashMap<String, (bool, BlockPos)>>> = Mutex::new(None);
+static WAND_DEBOUNCE: Mutex<Option<HashMap<String, BlockPos>>> = Mutex::new(None);
 
 pub(crate) struct Selection {
     pub pos1: BlockPos,
@@ -83,13 +83,14 @@ impl EventHandler<PlayerInteractEvent> for WandInteractHandler {
             let debounce_map = debounce.get_or_insert_with(HashMap::new);
             let is_duplicate = debounce_map
                 .get(&player_name)
-                .is_some_and(|(last_p1, last_pos)| {
-                    *last_p1 == is_pos1
-                        && last_pos.x == clicked_pos.x
+                .is_some_and(|last_pos| {
+                    last_pos.x == clicked_pos.x
                         && last_pos.y == clicked_pos.y
                         && last_pos.z == clicked_pos.z
                 });
-            debounce_map.insert(player_name.clone(), (is_pos1, clicked_pos));
+            if !is_duplicate {
+                debounce_map.insert(player_name.clone(), clicked_pos);
+            }
             drop(debounce);
 
             if !is_duplicate {
