@@ -140,31 +140,51 @@ pub(crate) fn schedule_block_op(
             let chunk_x = s.batches[bi].chunk_x;
             let chunk_z = s.batches[bi].chunk_z;
 
-            let flags = world::BlockFlags::FORCE_STATE
-                | world::BlockFlags::SKIP_DROPS
-                | world::BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
-                | world::BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
-
-            if record {
-                let chunk = world.get_chunk(chunk_x, chunk_z);
-                for i in offset..offset + to_place {
-                    let (pos, state_id) = s.batches[bi].blocks[i];
-                    let old_id = match &chunk {
-                        Some(c) => c.get_block_state_id(BlockPos {
+            match world.get_chunk(chunk_x, chunk_z) {
+                Some(chunk) => {
+                    for i in offset..offset + to_place {
+                        let (pos, state_id) = s.batches[bi].blocks[i];
+                        let local = BlockPos {
                             x: pos.x.rem_euclid(16),
                             y: pos.y,
                             z: pos.z.rem_euclid(16),
-                        }),
-                        None => world.get_block_state_id(pos),
-                    };
-                    s.old_snapshots.push(BlockSnapshot { pos, state_id: old_id });
-                    s.new_snapshots.push(BlockSnapshot { pos, state_id });
-                    world.set_block_state(pos, state_id, flags);
+                        };
+
+                        if record {
+                            let old_id = chunk.get_block_state_id(local);
+                            s.old_snapshots.push(BlockSnapshot {
+                                pos,
+                                state_id: old_id,
+                            });
+                            s.new_snapshots.push(BlockSnapshot { pos, state_id });
+                        }
+
+                        chunk.set_block_state(local, state_id);
+                    }
+
+                    if offset + to_place >= batch_len {
+                        chunk.resend_to_players();
+                    }
                 }
-            } else {
-                for i in offset..offset + to_place {
-                    let (pos, state_id) = s.batches[bi].blocks[i];
-                    world.set_block_state(pos, state_id, flags);
+                None => {
+                    let flags = world::BlockFlags::FORCE_STATE
+                        | world::BlockFlags::SKIP_DROPS
+                        | world::BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
+                        | world::BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
+                    for i in offset..offset + to_place {
+                        let (pos, state_id) = s.batches[bi].blocks[i];
+
+                        if record {
+                            let old_id = world.get_block_state_id(pos);
+                            s.old_snapshots.push(BlockSnapshot {
+                                pos,
+                                state_id: old_id,
+                            });
+                            s.new_snapshots.push(BlockSnapshot { pos, state_id });
+                        }
+
+                        world.set_block_state(pos, state_id, flags);
+                    }
                 }
             }
 
