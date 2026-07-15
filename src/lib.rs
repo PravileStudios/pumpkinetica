@@ -284,6 +284,10 @@ pub(crate) fn msg_warn(text: &str) -> TextComponent {
     msg(text, NamedColor::Yellow)
 }
 
+pub(crate) fn normalize_item_name(name: &str) -> &str {
+    name.strip_prefix("minecraft:").unwrap_or(name)
+}
+
 // ── Block Resolution ────────────────────────────────────────────────
 
 pub(crate) struct LoadedSchematic {

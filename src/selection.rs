@@ -2,7 +2,9 @@ use pumpkin_plugin_api::common::{BlockPos, Hand};
 use pumpkin_plugin_api::events::{EventHandler, FromIntoEvent, InteractAction, PlayerInteractEvent};
 use pumpkin_plugin_api::Server;
 
-use crate::{PLAYER_SELECTIONS, get_config, msg_info};
+use pumpkin_plugin_api::logging::{self, LogLevel};
+
+use crate::{PLAYER_SELECTIONS, get_config, msg_info, normalize_item_name};
 
 pub(crate) struct Selection {
     pub pos1: BlockPos,
@@ -42,11 +44,19 @@ impl EventHandler<PlayerInteractEvent> for WandInteractHandler {
     fn handle(&self, _server: Server, mut event: <PlayerInteractEvent as FromIntoEvent>::Data) -> <PlayerInteractEvent as FromIntoEvent>::Data {
         let config = get_config();
 
-        let Some(item) = event.player.get_item_in_hand(Hand::Right) else {
+        let item_key = event.player.get_item_in_hand(Hand::Right)
+            .map(|i| i.get_registry_key());
+
+        logging::log(LogLevel::Info, &format!(
+            "[PSchematics] Interact event: action={:?}, item={:?}, wand_config={}",
+            event.action, item_key, config.wand_item
+        ));
+
+        let Some(key) = item_key else {
             return event;
         };
 
-        if item.get_registry_key() != config.wand_item {
+        if normalize_item_name(&key) != normalize_item_name(&config.wand_item) {
             return event;
         }
 
