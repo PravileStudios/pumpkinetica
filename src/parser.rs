@@ -35,11 +35,7 @@ pub struct TileEntity {
 
 impl Region {
     pub fn abs_size(&self) -> [i32; 3] {
-        [
-            self.size[0].abs(),
-            self.size[1].abs(),
-            self.size[2].abs(),
-        ]
+        [self.size[0].abs(), self.size[1].abs(), self.size[2].abs()]
     }
 
     pub fn bits_per_entry(&self) -> u32 {
@@ -100,8 +96,7 @@ pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
         .and_then(|m| get_string(m, "Name"))
         .unwrap_or_else(|| "unknown".into());
 
-    let regions_compound =
-        get_compound(&root, "Regions").ok_or("Missing 'Regions' tag")?;
+    let regions_compound = get_compound(&root, "Regions").ok_or("Missing 'Regions' tag")?;
 
     let mut regions = Vec::new();
     for (region_name, region_val) in regions_compound {
@@ -110,12 +105,12 @@ pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
             _ => continue,
         };
 
-        let position = get_int_triple(&region, "Position")?;
-        let size = get_int_triple(&region, "Size")?;
+        let position = get_int_triple(region, "Position")?;
+        let size = get_int_triple(region, "Size")?;
 
-        let palette = parse_palette(&region)?;
-        let block_data = get_long_array(&region, "BlockStates")?;
-        let tile_entities = parse_tile_entities(&region);
+        let palette = parse_palette(region)?;
+        let block_data = get_long_array(region, "BlockStates")?;
+        let tile_entities = parse_tile_entities(region);
 
         regions.push(Region {
             name: region_name.clone(),
@@ -179,15 +174,17 @@ fn parse_tile_entities(region: &HashMap<String, NbtValue>) -> Vec<TileEntity> {
             let y = get_int(compound, "y").unwrap_or(0);
             let z = get_int(compound, "z").unwrap_or(0);
             let bytes = serialize_nbt_value(entry);
-            Some(TileEntity { raw_nbt: bytes, x, y, z })
+            Some(TileEntity {
+                raw_nbt: bytes,
+                x,
+                y,
+                z,
+            })
         })
         .collect()
 }
 
-fn get_int_triple(
-    compound: &HashMap<String, NbtValue>,
-    key: &str,
-) -> Result<[i32; 3], String> {
+fn get_int_triple(compound: &HashMap<String, NbtValue>, key: &str) -> Result<[i32; 3], String> {
     let inner = get_compound(compound, key).ok_or(format!("Missing '{key}'"))?;
     let x = get_int(inner, "x").ok_or(format!("Missing '{key}.x'"))?;
     let y = get_int(inner, "y").ok_or(format!("Missing '{key}.y'"))?;
@@ -440,10 +437,7 @@ fn get_int(map: &HashMap<String, NbtValue>, key: &str) -> Option<i32> {
     }
 }
 
-fn get_long_array(
-    map: &HashMap<String, NbtValue>,
-    key: &str,
-) -> Result<Vec<i64>, String> {
+fn get_long_array(map: &HashMap<String, NbtValue>, key: &str) -> Result<Vec<i64>, String> {
     match map.get(key) {
         Some(NbtValue::LongArray(arr)) => Ok(arr.clone()),
         _ => Err(format!("Missing or invalid '{key}' (expected LongArray)")),
@@ -534,7 +528,10 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
     let total_blocks = (width * height * length) as usize;
     let block_indices = decode_varint_array(&block_data_bytes, total_blocks)?;
 
-    let bits = std::cmp::max(2, 32 - (palette.len() as u32).saturating_sub(1).leading_zeros());
+    let bits = std::cmp::max(
+        2,
+        32 - (palette.len() as u32).saturating_sub(1).leading_zeros(),
+    );
     let block_data = pack_indices_to_longs(&block_indices, bits);
 
     let tile_entities = if let Some(NbtValue::Compound(blocks)) = schem_data.get("Blocks") {
@@ -543,9 +540,7 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
         parse_schem_block_entities(schem_data)
     };
 
-    let name = filename
-        .trim_end_matches(".schem")
-        .to_string();
+    let name = filename.trim_end_matches(".schem").to_string();
 
     Ok(Schematic {
         name,
@@ -610,7 +605,7 @@ fn decode_varint_array(bytes: &[i8], expected_len: usize) -> Result<Vec<u16>, St
 
 fn pack_indices_to_longs(indices: &[u16], bits: u32) -> Vec<i64> {
     let entries_per_long = 64 / bits;
-    let num_longs = (indices.len() as u64 + entries_per_long as u64 - 1) / entries_per_long as u64;
+    let num_longs = (indices.len() as u64).div_ceil(entries_per_long as u64);
     let mut longs = vec![0i64; num_longs as usize];
 
     for (i, &idx) in indices.iter().enumerate() {

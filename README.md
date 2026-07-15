@@ -76,8 +76,10 @@ Config file: `plugins/pschematics/config.json`
 
 ```
 src/
-├── lib.rs          — Plugin entry, commands, paste scheduler, config
-└── litematica.rs   — Format parsers (.litematica + .schem), NBT parser
+├── lib.rs       — Plugin entry, config, messaging, block resolution
+├── commands.rs  — Command handlers (load, paste, list, info, status, reload, help)
+├── paste.rs     — Paste engine (chunk batching, tick scheduler)
+└── parser.rs    — Format parsers (.litematica + .schem), NBT parser
 ```
 
 ## License
