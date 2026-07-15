@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use pumpkin_plugin_api::common::BlockPos;
 
 pub(crate) struct BlockSnapshot {
@@ -13,23 +15,23 @@ pub(crate) struct UndoEntry {
 }
 
 pub(crate) struct PlayerHistory {
-    pub undo_stack: Vec<UndoEntry>,
-    pub redo_stack: Vec<UndoEntry>,
+    pub undo_stack: VecDeque<UndoEntry>,
+    pub redo_stack: VecDeque<UndoEntry>,
 }
 
 impl PlayerHistory {
     pub fn new() -> Self {
         Self {
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
         }
     }
 
     pub fn push_undo(&mut self, entry: UndoEntry, max_depth: usize) {
         if self.undo_stack.len() >= max_depth {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
-        self.undo_stack.push(entry);
+        self.undo_stack.push_back(entry);
         self.redo_stack.clear();
     }
 }

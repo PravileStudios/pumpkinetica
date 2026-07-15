@@ -20,7 +20,7 @@ impl Clipboard {
     }
 
     pub fn to_work_queue(&self, origin: BlockPos) -> Vec<BlockPlacement> {
-        let mut queue = Vec::new();
+        let mut queue = Vec::with_capacity(self.blocks.len());
         for y in 0..self.size_y {
             for z in 0..self.size_z {
                 for x in 0..self.size_x {

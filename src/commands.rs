@@ -159,9 +159,9 @@ impl CommandHandler for PasteHandler {
         let player_name = player.get_name();
         let pos = player.get_position();
         let origin = BlockPos {
-            x: pos.0 as i32,
-            y: pos.1 as i32,
-            z: pos.2 as i32,
+            x: pos.0.floor() as i32,
+            y: pos.1.floor() as i32,
+            z: pos.2.floor() as i32,
         };
         let player_world = player.get_world();
 
@@ -486,11 +486,12 @@ impl CommandHandler for ReloadHandler {
         _args: ConsumedArgs,
     ) -> Result<i32, CommandError> {
         let config = crate::load_config(&self.data_folder);
-        *crate::CONFIG.lock().unwrap() = Some(config.clone());
-        sender.send_message(msg_success(&format!(
+        let reload_msg = format!(
             "Config reloaded. Wand: {}, blocks/tick: {}, max pastes: {}",
             config.wand_item, config.blocks_per_tick, config.max_concurrent_pastes
-        )));
+        );
+        *crate::CONFIG.lock().unwrap() = Some(config);
+        sender.send_message(msg_success(&reload_msg));
         Ok(0)
     }
 }
@@ -515,9 +516,9 @@ impl CommandHandler for Pos1Handler {
         } else {
             let p = player.get_position();
             BlockPos {
-                x: p.0 as i32,
-                y: p.1 as i32,
-                z: p.2 as i32,
+                x: p.0.floor() as i32,
+                y: p.1.floor() as i32,
+                z: p.2.floor() as i32,
             }
         };
 
@@ -556,9 +557,9 @@ impl CommandHandler for Pos2Handler {
         } else {
             let p = player.get_position();
             BlockPos {
-                x: p.0 as i32,
-                y: p.1 as i32,
-                z: p.2 as i32,
+                x: p.0.floor() as i32,
+                y: p.1.floor() as i32,
+                z: p.2.floor() as i32,
             }
         };
 
@@ -617,7 +618,7 @@ impl CommandHandler for CopyHandler {
         let player_name = player.get_name();
         let config = get_config();
 
-        let selection = {
+        let ((min, max), (sx, sy, sz), volume) = {
             let sel = PLAYER_SELECTIONS.lock().unwrap();
             let map = sel
                 .as_ref()
@@ -625,10 +626,8 @@ impl CommandHandler for CopyHandler {
             let s = map
                 .get(&player_name)
                 .ok_or_else(|| CommandError::CommandFailed(msg_error("No selection set. Use wand or /schematic pos1/pos2.")))?;
-            (s.pos1, s.pos2, s.bounds(), s.dimensions(), s.volume())
+            (s.bounds(), s.dimensions(), s.volume())
         };
-
-        let (_, _, (min, max), (sx, sy, sz), volume) = selection;
 
         if volume > config.max_selection_volume {
             sender.send_message(msg_error(&format!(
@@ -640,9 +639,9 @@ impl CommandHandler for CopyHandler {
 
         let player_pos = player.get_position();
         let player_block = BlockPos {
-            x: player_pos.0 as i32,
-            y: player_pos.1 as i32,
-            z: player_pos.2 as i32,
+            x: player_pos.0.floor() as i32,
+            y: player_pos.1.floor() as i32,
+            z: player_pos.2.floor() as i32,
         };
 
         let world = player.get_world();
@@ -874,11 +873,10 @@ impl CommandHandler for UndoHandler {
                 .and_then(|m| m.get_mut(&player_name))
                 .ok_or_else(|| CommandError::CommandFailed(msg_error("Nothing to undo.")))?;
 
-            if history.undo_stack.is_empty() {
+            let Some(entry) = history.undo_stack.pop_back() else {
                 return Err(CommandError::CommandFailed(msg_error("Nothing to undo.")));
-            }
-
-            history.undo_stack.pop().unwrap()
+            };
+            entry
         };
 
         let block_count = entry.old_states.len();
@@ -902,7 +900,7 @@ impl CommandHandler for UndoHandler {
                 let history = map
                     .entry(player_name.clone())
                     .or_insert_with(PlayerHistory::new);
-                history.redo_stack.push(entry);
+                history.redo_stack.push_back(entry);
             }
         }
 
@@ -946,11 +944,10 @@ impl CommandHandler for RedoHandler {
                 .and_then(|m| m.get_mut(&player_name))
                 .ok_or_else(|| CommandError::CommandFailed(msg_error("Nothing to redo.")))?;
 
-            if history.redo_stack.is_empty() {
+            let Some(entry) = history.redo_stack.pop_back() else {
                 return Err(CommandError::CommandFailed(msg_error("Nothing to redo.")));
-            }
-
-            history.redo_stack.pop().unwrap()
+            };
+            entry
         };
 
         let block_count = entry.new_states.len();
@@ -972,7 +969,7 @@ impl CommandHandler for RedoHandler {
                 let history = map
                     .entry(player_name.clone())
                     .or_insert_with(PlayerHistory::new);
-                history.undo_stack.push(entry);
+                history.undo_stack.push_back(entry);
             }
         }
 
@@ -1167,7 +1164,7 @@ impl CommandHandler for SetHandler {
             return Ok(1);
         }
 
-        let mut work_queue = Vec::new();
+        let mut work_queue = Vec::with_capacity(volume as usize);
         for y in min.y..=max.y {
             for z in min.z..=max.z {
                 for x in min.x..=max.x {

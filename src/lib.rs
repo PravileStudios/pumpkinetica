@@ -12,7 +12,9 @@ use std::sync::atomic::AtomicUsize;
 use serde::{Deserialize, Serialize};
 
 use pumpkin_plugin_api::commands::Command;
-use pumpkin_plugin_api::events::{BlockBreakEvent, EventPriority, PlayerInteractEvent};
+use pumpkin_plugin_api::events::{
+    BlockBreakEvent, EventPriority, PlayerInteractEvent, PlayerLeaveEvent,
+};
 use pumpkin_plugin_api::{
     Context, Plugin, PluginMetadata, Result,
     command::CommandNode,
@@ -95,6 +97,11 @@ impl Plugin for PSchematics {
             EventPriority::Normal,
             true,
         )?;
+        context.register_event_handler::<PlayerLeaveEvent, _>(
+            selection::PlayerCleanupHandler,
+            EventPriority::Normal,
+            false,
+        )?;
 
         // ── Command tree ────────────────────────────────────────────
 
@@ -123,9 +130,7 @@ impl Plugin for PSchematics {
 
         let save_arg =
             CommandNode::argument("name", &ArgumentType::String(StringType::SingleWord))
-                .execute(SaveHandler {
-                    schematics_dir: schematics_dir.clone(),
-                });
+                .execute(SaveHandler { schematics_dir });
         let save_node = CommandNode::literal("save");
         save_node.then(save_arg);
 
@@ -245,19 +250,20 @@ impl Default for PluginConfig {
     }
 }
 
+fn write_default_config(path: &str) -> PluginConfig {
+    let config = PluginConfig::default();
+    if let Ok(json) = serde_json::to_string_pretty(&config) {
+        let _ = std::fs::write(path, json);
+    }
+    config
+}
+
 pub(crate) fn load_config(data_folder: &str) -> PluginConfig {
     let path = format!("{}/config.json", data_folder);
     match std::fs::read_to_string(&path) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|_| {
-            let config = PluginConfig::default();
-            let _ = std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap());
-            config
-        }),
-        Err(_) => {
-            let config = PluginConfig::default();
-            let _ = std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap());
-            config
-        }
+        Ok(contents) => serde_json::from_str(&contents)
+            .unwrap_or_else(|_| write_default_config(&path)),
+        Err(_) => write_default_config(&path),
     }
 }
 

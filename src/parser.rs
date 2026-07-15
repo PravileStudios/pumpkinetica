@@ -503,7 +503,7 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
             (p, d)
         };
 
-    let mut palette_entries: Vec<(i32, PaletteEntry)> = Vec::new();
+    let mut palette_entries: Vec<(i32, PaletteEntry)> = Vec::with_capacity(palette_compound.len());
     for (block_str, idx_val) in palette_compound {
         let idx = match idx_val {
             NbtValue::Int(i) => *i,
@@ -579,16 +579,15 @@ fn parse_block_state_string(s: &str) -> (String, HashMap<String, String>) {
 fn decode_varint_array(bytes: &[i8], expected_len: usize) -> Result<Vec<u16>, String> {
     let mut result = Vec::with_capacity(expected_len);
     let mut i = 0;
-    let data: Vec<u8> = bytes.iter().map(|b| *b as u8).collect();
 
-    while i < data.len() && result.len() < expected_len {
+    while i < bytes.len() && result.len() < expected_len {
         let mut value: u32 = 0;
         let mut shift: u32 = 0;
         loop {
-            if i >= data.len() {
+            if i >= bytes.len() {
                 return Err("Unexpected end of varint data".into());
             }
-            let byte = data[i];
+            let byte = bytes[i] as u8;
             i += 1;
             value |= ((byte & 0x7F) as u32) << shift;
             if byte & 0x80 == 0 {
@@ -672,14 +671,14 @@ pub fn build_schem_nbt(
     indices: &[u16],
     size: (i32, i32, i32),
 ) -> NbtValue {
-    let mut palette_compound = HashMap::new();
+    let mut palette_compound = HashMap::with_capacity(palette_strings.len());
     for (name, &idx) in palette_strings {
         palette_compound.insert(name.clone(), NbtValue::Int(idx as i32));
     }
 
     let block_data = encode_varint_array(indices);
 
-    let mut schematic_compound = HashMap::new();
+    let mut schematic_compound = HashMap::with_capacity(8);
     schematic_compound.insert("Version".into(), NbtValue::Int(2));
     schematic_compound.insert("DataVersion".into(), NbtValue::Int(3837));
     schematic_compound.insert("Width".into(), NbtValue::Short(size.0 as i16));

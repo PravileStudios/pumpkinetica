@@ -35,7 +35,9 @@ struct PasteState {
 }
 
 fn build_chunk_batches(queue: Vec<BlockPlacement>) -> Vec<ChunkBatch> {
-    let mut chunk_map: HashMap<(i32, i32), Vec<(BlockPos, u16)>> = HashMap::new();
+    let estimated_chunks = (queue.len() / 256).max(16);
+    let mut chunk_map: HashMap<(i32, i32), Vec<(BlockPos, u16)>> =
+        HashMap::with_capacity(estimated_chunks);
     for p in queue {
         let cx = p.pos.x.div_euclid(16);
         let cz = p.pos.z.div_euclid(16);
@@ -69,7 +71,10 @@ pub(crate) fn schedule_paste(
         dimension,
         blocks_per_tick,
         player_name,
-        format!("Paste '{schematic_name}' at ({}, {}, {})", origin.x, origin.y, origin.z),
+        format!(
+            "Paste '{schematic_name}' at ({}, {}, {})",
+            origin.x, origin.y, origin.z
+        ),
         true,
     );
 }
@@ -85,21 +90,30 @@ pub(crate) fn schedule_block_op(
 ) {
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
+    let total_blocks: usize = queue.len();
     let state = std::sync::Arc::new(Mutex::new(PasteState {
         batches: build_chunk_batches(queue),
         batch_idx: 0,
         block_offset: 0,
         tile_entities,
         record_undo,
-        old_snapshots: Vec::new(),
-        new_snapshots: Vec::new(),
+        old_snapshots: if record_undo {
+            Vec::with_capacity(total_blocks)
+        } else {
+            Vec::new()
+        },
+        new_snapshots: if record_undo {
+            Vec::with_capacity(total_blocks)
+        } else {
+            Vec::new()
+        },
     }));
     let state_clone = state.clone();
     let task_id = std::sync::Arc::new(Mutex::new(0u32));
     let task_id_clone = task_id.clone();
-    let description_clone = description.clone();
-    let dimension_clone = dimension.clone();
-    let player_name_clone = player_name.clone();
+    let mut description_owned = Some(description.clone());
+    let mut dimension_owned = Some(dimension.clone());
+    let player_name_owned = Some(player_name.clone());
 
     let id = pumpkin_plugin_api::scheduler::schedule_repeating_task(0, 1, move |server| {
         let world = match server.get_world_by_name(&dimension) {
@@ -116,27 +130,27 @@ pub(crate) fn schedule_block_op(
         let mut remaining = blocks_per_tick;
 
         while remaining > 0 && s.batch_idx < s.batches.len() {
-            let chunk_x = s.batches[s.batch_idx].chunk_x;
-            let chunk_z = s.batches[s.batch_idx].chunk_z;
-            let batch_len = s.batches[s.batch_idx].blocks.len();
-            let blocks_left = batch_len - s.block_offset;
-            let to_place = std::cmp::min(remaining, blocks_left);
+            let bi = s.batch_idx;
             let offset = s.block_offset;
-            let record_undo = s.record_undo;
+            let batch_len = s.batches[bi].blocks.len();
+            let blocks_left = batch_len - offset;
+            let to_place = std::cmp::min(remaining, blocks_left);
+            let record = s.record_undo;
 
-            let block_slice: Vec<(BlockPos, u16)> =
-                s.batches[s.batch_idx].blocks[offset..offset + to_place].to_vec();
+            let chunk_x = s.batches[bi].chunk_x;
+            let chunk_z = s.batches[bi].chunk_z;
 
             match world.get_chunk(chunk_x, chunk_z) {
                 Some(chunk) => {
-                    for &(pos, state_id) in &block_slice {
+                    for i in offset..offset + to_place {
+                        let (pos, state_id) = s.batches[bi].blocks[i];
                         let local = BlockPos {
                             x: pos.x.rem_euclid(16),
                             y: pos.y,
                             z: pos.z.rem_euclid(16),
                         };
 
-                        if record_undo {
+                        if record {
                             let old_id = chunk.get_block_state_id(local);
                             s.old_snapshots.push(BlockSnapshot {
                                 pos,
@@ -153,8 +167,10 @@ pub(crate) fn schedule_block_op(
                         | world::BlockFlags::SKIP_DROPS
                         | world::BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
                         | world::BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
-                    for &(pos, state_id) in &block_slice {
-                        if record_undo {
+                    for i in offset..offset + to_place {
+                        let (pos, state_id) = s.batches[bi].blocks[i];
+
+                        if record {
                             let old_id = world.get_block_state_id(pos);
                             s.old_snapshots.push(BlockSnapshot {
                                 pos,
@@ -183,17 +199,22 @@ pub(crate) fn schedule_block_op(
                 let _ = world.set_block_entity_nbt(te.pos, &te.nbt);
             }
 
+            s.batches = Vec::new();
+
             if s.record_undo && !s.old_snapshots.is_empty() {
                 let config = get_config();
                 let entry = UndoEntry {
-                    description: description_clone.clone(),
-                    dimension: dimension_clone.clone(),
+                    description: description_owned.take().unwrap_or_default(),
+                    dimension: dimension_owned.take().unwrap_or_default(),
                     old_states: std::mem::take(&mut s.old_snapshots),
                     new_states: std::mem::take(&mut s.new_snapshots),
                 };
                 if let Some(ref mut histories) = *PLAYER_HISTORIES.lock().unwrap() {
+                    let pname = player_name_owned
+                        .clone()
+                        .unwrap_or_default();
                     let history = histories
-                        .entry(player_name_clone.clone())
+                        .entry(pname)
                         .or_insert_with(PlayerHistory::new);
                     history.push_undo(entry, config.max_undo_history);
                 }
