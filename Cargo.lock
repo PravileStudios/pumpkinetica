@@ -242,6 +242,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pschematics"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "pumpkin-plugin-api",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pumpkin-plugin-api"
 version = "0.1.0"
 dependencies = [
@@ -268,14 +278,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "schematic-paster"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "pumpkin-plugin-api",
 ]
 
 [[package]]
