@@ -1,0 +1,14 @@
+[package]
+name = "schematic-paster"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpkin-plugin-api = { path = "../Pumpkin/pumpkin-plugin-api" }
+flate2 = "1"
+
+[package.metadata.component]
+target = { path = "../Pumpkin/pumpkin-plugin-wit" }
