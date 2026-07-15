@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
 use pumpkin_plugin_api::common::BlockPos;
-use pumpkin_plugin_api::logging::{self, LogLevel};
 use pumpkin_plugin_api::world;
 
 use crate::history::{BlockSnapshot, PlayerHistory, UndoEntry};
@@ -86,15 +85,8 @@ pub(crate) fn schedule_block_op(
 ) {
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
-    let total_blocks: usize = queue.len();
-    let batches = build_chunk_batches(queue);
-    logging::log(LogLevel::Info, &format!(
-        "[PSchematics] schedule_block_op: {} blocks, {} chunk batches, dim={}, desc={}",
-        total_blocks, batches.len(), dimension, description
-    ));
-
     let state = std::sync::Arc::new(Mutex::new(PasteState {
-        batches,
+        batches: build_chunk_batches(queue),
         batch_idx: 0,
         block_offset: 0,
         tile_entities,
@@ -113,9 +105,6 @@ pub(crate) fn schedule_block_op(
         let world = match server.get_world_by_name(&dimension) {
             Some(w) => w,
             None => {
-                logging::log(LogLevel::Error, &format!(
-                    "[PSchematics] World '{}' not found, aborting paste", dimension
-                ));
                 ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
                 let tid = *task_id_clone.lock().unwrap();
                 pumpkin_plugin_api::scheduler::cancel_task(tid);

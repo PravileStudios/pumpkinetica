@@ -1,8 +1,8 @@
 use pumpkin_plugin_api::common::{BlockPos, Hand};
-use pumpkin_plugin_api::events::{EventHandler, FromIntoEvent, InteractAction, PlayerInteractEvent};
+use pumpkin_plugin_api::events::{
+    BlockBreakEvent, EventHandler, FromIntoEvent, InteractAction, PlayerInteractEvent,
+};
 use pumpkin_plugin_api::Server;
-
-use pumpkin_plugin_api::logging::{self, LogLevel};
 
 use crate::{PLAYER_SELECTIONS, get_config, msg_info, normalize_item_name};
 
@@ -44,15 +44,8 @@ impl EventHandler<PlayerInteractEvent> for WandInteractHandler {
     fn handle(&self, _server: Server, mut event: <PlayerInteractEvent as FromIntoEvent>::Data) -> <PlayerInteractEvent as FromIntoEvent>::Data {
         let config = get_config();
 
-        let item_key = event.player.get_item_in_hand(Hand::Right)
-            .map(|i| i.get_registry_key());
-
-        logging::log(LogLevel::Info, &format!(
-            "[PSchematics] Interact event: action={:?}, item={:?}, wand_config={}",
-            event.action, item_key, config.wand_item
-        ));
-
-        let Some(key) = item_key else {
+        let Some(key) = event.player.get_item_in_hand(Hand::Right)
+            .map(|i| i.get_registry_key()) else {
             return event;
         };
 
@@ -104,6 +97,28 @@ impl EventHandler<PlayerInteractEvent> for WandInteractHandler {
                 event.cancelled = true;
             }
             _ => {}
+        }
+
+        event
+    }
+}
+
+pub(crate) struct WandBreakCancelHandler;
+
+impl EventHandler<BlockBreakEvent> for WandBreakCancelHandler {
+    fn handle(&self, _server: Server, mut event: <BlockBreakEvent as FromIntoEvent>::Data) -> <BlockBreakEvent as FromIntoEvent>::Data {
+        let config = get_config();
+
+        let Some(ref player) = event.player else {
+            return event;
+        };
+
+        let Some(item) = player.get_item_in_hand(Hand::Right) else {
+            return event;
+        };
+
+        if normalize_item_name(&item.get_registry_key()) == normalize_item_name(&config.wand_item) {
+            event.cancelled = true;
         }
 
         event

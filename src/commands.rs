@@ -1,7 +1,6 @@
 use std::sync::atomic::Ordering;
 
 use pumpkin_plugin_api::commands::CommandHandler;
-use pumpkin_plugin_api::logging::{self, LogLevel};
 use pumpkin_plugin_api::{
     Result, Server,
     command::{CommandError, CommandSender, ConsumedArgs},
@@ -179,22 +178,9 @@ impl CommandHandler for PasteHandler {
             if let Some(ref map) = *clips
                 && let Some(clip) = map.get(&player_name)
             {
-                logging::log(LogLevel::Info, &format!(
-                    "[PSchematics] Paste clipboard: size={}x{}x{}, offset=({},{},{}), origin=({},{},{}), non_air={}",
-                    clip.size_x, clip.size_y, clip.size_z,
-                    clip.offset.x, clip.offset.y, clip.offset.z,
-                    origin.x, origin.y, origin.z,
-                    clip.blocks.iter().filter(|&&b| b != 0).count()
-                ));
-
                 let work_queue = clip.to_work_queue(origin);
                 let total = work_queue.len();
                 let dimension = player_world.get_dimension();
-
-                logging::log(LogLevel::Info, &format!(
-                    "[PSchematics] Paste work_queue: {} blocks, dimension={}",
-                    total, dimension
-                ));
 
                 sender.send_message(msg_info(&format!("Pasting clipboard ({total} blocks)...")));
 
@@ -661,19 +647,9 @@ impl CommandHandler for CopyHandler {
 
         let world = player.get_world();
 
-        logging::log(LogLevel::Info, &format!(
-            "[PSchematics] Copy: min=({},{},{}), max=({},{},{}), size={}x{}x{}, player=({},{},{})",
-            min.x, min.y, min.z, max.x, max.y, max.z, sx, sy, sz,
-            player_block.x, player_block.y, player_block.z
-        ));
-
         let blocks = read_selection_chunk_batched(&world, min, max, sx, sy, sz);
 
         let non_air = blocks.iter().filter(|&&b| b != 0).count();
-        logging::log(LogLevel::Info, &format!(
-            "[PSchematics] Copy read {} total blocks, {} non-air",
-            blocks.len(), non_air
-        ));
 
         let clip = Clipboard {
             blocks,

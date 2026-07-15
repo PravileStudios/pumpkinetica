@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicUsize;
 use serde::{Deserialize, Serialize};
 
 use pumpkin_plugin_api::commands::Command;
-use pumpkin_plugin_api::events::{EventPriority, PlayerInteractEvent};
+use pumpkin_plugin_api::events::{BlockBreakEvent, EventPriority, PlayerInteractEvent};
 use pumpkin_plugin_api::{
     Context, Plugin, PluginMetadata, Result,
     command::CommandNode,
@@ -84,9 +84,14 @@ impl Plugin for PSchematics {
 
         bootstrap_common_blocks();
 
-        // Wand event handler
+        // Wand event handlers
         context.register_event_handler::<PlayerInteractEvent, _>(
             selection::WandInteractHandler,
+            EventPriority::Normal,
+            true,
+        )?;
+        context.register_event_handler::<BlockBreakEvent, _>(
+            selection::WandBreakCancelHandler,
             EventPriority::Normal,
             true,
         )?;
