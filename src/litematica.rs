@@ -449,3 +449,212 @@ fn get_long_array(
         _ => Err(format!("Missing or invalid '{key}' (expected LongArray)")),
     }
 }
+
+fn get_short(map: &HashMap<String, NbtValue>, key: &str) -> Option<i16> {
+    match map.get(key) {
+        Some(NbtValue::Short(v)) => Some(*v),
+        _ => None,
+    }
+}
+
+fn get_byte_array(map: &HashMap<String, NbtValue>, key: &str) -> Option<Vec<i8>> {
+    match map.get(key) {
+        Some(NbtValue::ByteArray(arr)) => Some(arr.clone()),
+        _ => None,
+    }
+}
+
+pub fn parse_schematic(data: &[u8], filename: &str) -> Result<Schematic, String> {
+    if filename.ends_with(".schem") {
+        parse_schem(data, filename)
+    } else {
+        parse_litematica(data)
+    }
+}
+
+pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
+    let mut decoder = GzDecoder::new(Cursor::new(data));
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .map_err(|e| format!("GZIP decode failed: {e}"))?;
+
+    let nbt = parse_nbt(&decompressed)?;
+
+    let root = match &nbt {
+        NbtValue::Compound(map) => map,
+        _ => return Err("Root is not a compound".into()),
+    };
+
+    let schem_data = if let Some(NbtValue::Compound(s)) = root.get("Schematic") {
+        s
+    } else {
+        root
+    };
+
+    let width = get_short(schem_data, "Width").ok_or("Missing Width")? as i32;
+    let height = get_short(schem_data, "Height").ok_or("Missing Height")? as i32;
+    let length = get_short(schem_data, "Length").ok_or("Missing Length")? as i32;
+
+    let palette_compound = get_compound(schem_data, "Palette")
+        .ok_or("Missing Palette")?;
+
+    let mut palette_entries: Vec<(i32, PaletteEntry)> = Vec::new();
+    for (block_str, idx_val) in palette_compound {
+        let idx = match idx_val {
+            NbtValue::Int(i) => *i,
+            _ => continue,
+        };
+
+        let (name, properties) = parse_block_state_string(block_str);
+        palette_entries.push((idx, PaletteEntry { name, properties }));
+    }
+
+    palette_entries.sort_by_key(|(idx, _)| *idx);
+    let max_idx = palette_entries.last().map(|(i, _)| *i).unwrap_or(0) as usize;
+    let mut palette = vec![
+        PaletteEntry {
+            name: "minecraft:air".into(),
+            properties: HashMap::new(),
+        };
+        max_idx + 1
+    ];
+    for (idx, entry) in palette_entries {
+        palette[idx as usize] = entry;
+    }
+
+    let block_data_bytes = get_byte_array(schem_data, "BlockData")
+        .ok_or("Missing BlockData")?;
+
+    let total_blocks = (width * height * length) as usize;
+    let block_indices = decode_varint_array(&block_data_bytes, total_blocks)?;
+
+    let bits = std::cmp::max(2, 32 - (palette.len() as u32).saturating_sub(1).leading_zeros());
+    let block_data = pack_indices_to_longs(&block_indices, bits);
+
+    let tile_entities = parse_schem_block_entities(schem_data);
+
+    let name = filename
+        .trim_end_matches(".schem")
+        .to_string();
+
+    Ok(Schematic {
+        name,
+        regions: vec![Region {
+            name: "main".into(),
+            position: [0, 0, 0],
+            size: [width, height, length],
+            palette,
+            block_data,
+            tile_entities,
+        }],
+    })
+}
+
+fn parse_block_state_string(s: &str) -> (String, HashMap<String, String>) {
+    let mut properties = HashMap::new();
+    if let Some(bracket) = s.find('[') {
+        let name = s[..bracket].to_string();
+        let props_str = &s[bracket + 1..s.len().saturating_sub(1)];
+        for pair in props_str.split(',') {
+            let pair = pair.trim();
+            if let Some(eq) = pair.find('=') {
+                let key = pair[..eq].trim().to_string();
+                let val = pair[eq + 1..].trim().to_string();
+                properties.insert(key, val);
+            }
+        }
+        (name, properties)
+    } else {
+        (s.to_string(), properties)
+    }
+}
+
+fn decode_varint_array(bytes: &[i8], expected_len: usize) -> Result<Vec<u16>, String> {
+    let mut result = Vec::with_capacity(expected_len);
+    let mut i = 0;
+    let data: Vec<u8> = bytes.iter().map(|b| *b as u8).collect();
+
+    while i < data.len() && result.len() < expected_len {
+        let mut value: u32 = 0;
+        let mut shift: u32 = 0;
+        loop {
+            if i >= data.len() {
+                return Err("Unexpected end of varint data".into());
+            }
+            let byte = data[i];
+            i += 1;
+            value |= ((byte & 0x7F) as u32) << shift;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+            if shift >= 35 {
+                return Err("Varint too large".into());
+            }
+        }
+        result.push(value as u16);
+    }
+
+    Ok(result)
+}
+
+fn pack_indices_to_longs(indices: &[u16], bits: u32) -> Vec<i64> {
+    let entries_per_long = 64 / bits;
+    let num_longs = (indices.len() as u64 + entries_per_long as u64 - 1) / entries_per_long as u64;
+    let mut longs = vec![0i64; num_longs as usize];
+
+    for (i, &idx) in indices.iter().enumerate() {
+        let start_offset = (i as u64) * (bits as u64);
+        let arr_index = (start_offset >> 6) as usize;
+        let bit_offset = (start_offset & 0x3F) as u32;
+
+        longs[arr_index] |= (idx as i64) << bit_offset;
+
+        if bit_offset + bits > 64 && arr_index + 1 < longs.len() {
+            longs[arr_index + 1] |= (idx as i64) >> (64 - bit_offset);
+        }
+    }
+
+    longs
+}
+
+fn parse_schem_block_entities(schem_data: &HashMap<String, NbtValue>) -> Vec<TileEntity> {
+    let key = if schem_data.contains_key("BlockEntities") {
+        "BlockEntities"
+    } else {
+        "TileEntities"
+    };
+
+    let list = match schem_data.get(key) {
+        Some(NbtValue::List(l)) => l,
+        _ => return Vec::new(),
+    };
+
+    list.iter()
+        .filter_map(|entry| {
+            let compound = match entry {
+                NbtValue::Compound(c) => c,
+                _ => return None,
+            };
+
+            let pos = match compound.get("Pos") {
+                Some(NbtValue::IntArray(arr)) if arr.len() >= 3 => (arr[0], arr[1], arr[2]),
+                _ => {
+                    let x = get_int(compound, "x").unwrap_or(0);
+                    let y = get_int(compound, "y").unwrap_or(0);
+                    let z = get_int(compound, "z").unwrap_or(0);
+                    (x, y, z)
+                }
+            };
+
+            let bytes = serialize_nbt_value(entry);
+            Some(TileEntity {
+                raw_nbt: bytes,
+                x: pos.0,
+                y: pos.1,
+                z: pos.2,
+            })
+        })
+        .collect()
+}

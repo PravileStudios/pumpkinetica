@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use serde::{Deserialize, Serialize};
+
 use pumpkin_plugin_api::commands::{Command, CommandHandler};
 use pumpkin_plugin_api::{
     Context, Plugin, PluginMetadata, Result, Server,
@@ -19,14 +21,59 @@ use pumpkin_plugin_api::{
 
 use litematica::{PaletteEntry, Schematic};
 
-const BLOCKS_PER_TICK: usize = 4096;
-const MAX_CONCURRENT_PASTES: usize = 4;
 const PREFIX: &str = "[PSchematics] ";
 
 struct SchematicPasterPlugin;
 
+static CONFIG: Mutex<Option<PluginConfig>> = Mutex::new(None);
 static LOADED_SCHEMATICS: Mutex<Option<HashMap<String, LoadedSchematic>>> = Mutex::new(None);
 static ACTIVE_PASTES: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Serialize, Deserialize, Clone)]
+struct PluginConfig {
+    #[serde(default = "default_fallback_block")]
+    fallback_block: String,
+    #[serde(default = "default_blocks_per_tick")]
+    blocks_per_tick: usize,
+    #[serde(default = "default_max_concurrent_pastes")]
+    max_concurrent_pastes: usize,
+}
+
+fn default_fallback_block() -> String { "minecraft:cobblestone".into() }
+fn default_blocks_per_tick() -> usize { 4096 }
+fn default_max_concurrent_pastes() -> usize { 4 }
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            fallback_block: default_fallback_block(),
+            blocks_per_tick: default_blocks_per_tick(),
+            max_concurrent_pastes: default_max_concurrent_pastes(),
+        }
+    }
+}
+
+fn load_config(data_folder: &str) -> PluginConfig {
+    let path = format!("{}/config.json", data_folder);
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => {
+            serde_json::from_str(&contents).unwrap_or_else(|_| {
+                let config = PluginConfig::default();
+                let _ = std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap());
+                config
+            })
+        }
+        Err(_) => {
+            let config = PluginConfig::default();
+            let _ = std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap());
+            config
+        }
+    }
+}
+
+fn get_config() -> PluginConfig {
+    CONFIG.lock().unwrap().clone().unwrap_or_default()
+}
 
 struct LoadedSchematic {
     schematic: Schematic,
@@ -36,28 +83,16 @@ struct LoadedSchematic {
 fn msg(text: &str, color: NamedColor) -> TextComponent {
     let prefix = TextComponent::text(PREFIX);
     prefix.color_named(NamedColor::Gold);
-    prefix.bold(true);
     let body = TextComponent::text(text);
     body.color_named(color);
     prefix.add_child(body);
     prefix
 }
 
-fn msg_error(text: &str) -> TextComponent {
-    msg(text, NamedColor::Red)
-}
-
-fn msg_success(text: &str) -> TextComponent {
-    msg(text, NamedColor::Green)
-}
-
-fn msg_info(text: &str) -> TextComponent {
-    msg(text, NamedColor::Aqua)
-}
-
-fn msg_warn(text: &str) -> TextComponent {
-    msg(text, NamedColor::Yellow)
-}
+fn msg_error(text: &str) -> TextComponent { msg(text, NamedColor::Red) }
+fn msg_success(text: &str) -> TextComponent { msg(text, NamedColor::Green) }
+fn msg_info(text: &str) -> TextComponent { msg(text, NamedColor::Aqua) }
+fn msg_warn(text: &str) -> TextComponent { msg(text, NamedColor::Yellow) }
 
 impl Plugin for SchematicPasterPlugin {
     fn new() -> Self {
@@ -67,9 +102,9 @@ impl Plugin for SchematicPasterPlugin {
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
             name: "pschematics".into(),
-            version: "0.2.0".into(),
+            version: "0.3.0".into(),
             authors: vec!["PumpkinMC".into()],
-            description: "Load and paste .litematica schematics into the world".into(),
+            description: "Load and paste .litematica and .schem schematics into the world".into(),
             dependencies: vec![],
             permissions: vec![
                 permissions::FS_READ_DATA.into(),
@@ -79,6 +114,12 @@ impl Plugin for SchematicPasterPlugin {
     }
 
     fn on_load(&mut self, context: Context) -> Result<()> {
+        let data_folder = context.get_data_folder();
+        let schematics_dir = format!("{}/schematics", data_folder);
+        let _ = std::fs::create_dir_all(&schematics_dir);
+        let config = load_config(&data_folder);
+        *CONFIG.lock().unwrap() = Some(config);
+
         {
             let mut map = LOADED_SCHEMATICS.lock().unwrap();
             *map = Some(HashMap::new());
@@ -86,7 +127,7 @@ impl Plugin for SchematicPasterPlugin {
 
         let file_arg = CommandNode::argument("file", &ArgumentType::String(StringType::SingleWord))
             .execute(LoadHandler {
-                data_folder: context.get_data_folder(),
+                schematics_dir: schematics_dir.clone(),
             });
         let load_node = CommandNode::literal("load");
         load_node.then(file_arg);
@@ -94,12 +135,16 @@ impl Plugin for SchematicPasterPlugin {
         let paste_node = CommandNode::literal("paste").execute(PasteHandler);
 
         let list_node = CommandNode::literal("list").execute(ListHandler {
-            data_folder: context.get_data_folder(),
+            schematics_dir: schematics_dir.clone(),
         });
 
         let info_node = CommandNode::literal("info").execute(InfoHandler);
 
         let status_node = CommandNode::literal("status").execute(StatusHandler);
+
+        let reload_node = CommandNode::literal("reload").execute(ReloadHandler {
+            data_folder,
+        });
 
         let cmd = Command::new(
             &["schematic".into(), "schem".into()],
@@ -110,6 +155,7 @@ impl Plugin for SchematicPasterPlugin {
         cmd.then(list_node);
         cmd.then(info_node);
         cmd.then(status_node);
+        cmd.then(reload_node);
 
         let _ = context.register_permission(&Permission {
             node: "pschematics:command.schematic".into(),
@@ -126,7 +172,14 @@ impl Plugin for SchematicPasterPlugin {
 
 register_plugin!(SchematicPasterPlugin);
 
-fn resolve_palette(palette: &[PaletteEntry]) -> Vec<Option<u16>> {
+fn resolve_fallback_block(config: &PluginConfig) -> Option<u16> {
+    if config.fallback_block == "skip" {
+        return None;
+    }
+    world::resolve_block_state(&config.fallback_block, &[])
+}
+
+fn resolve_palette(palette: &[PaletteEntry], fallback: Option<u16>) -> Vec<Option<u16>> {
     palette
         .iter()
         .map(|entry| {
@@ -138,13 +191,13 @@ fn resolve_palette(palette: &[PaletteEntry]) -> Vec<Option<u16>> {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
-            world::resolve_block_state(&entry.name, &props)
+            world::resolve_block_state(&entry.name, &props).or(fallback)
         })
         .collect()
 }
 
 struct LoadHandler {
-    data_folder: String,
+    schematics_dir: String,
 }
 
 impl CommandHandler for LoadHandler {
@@ -166,7 +219,7 @@ impl CommandHandler for LoadHandler {
             }
         };
 
-        let path = format!("{}/{}", self.data_folder, file_arg);
+        let path = format!("{}/{}", self.schematics_dir, file_arg);
         let data = match std::fs::read(&path) {
             Ok(d) => d,
             Err(e) => {
@@ -175,7 +228,7 @@ impl CommandHandler for LoadHandler {
             }
         };
 
-        let schematic = match litematica::parse_litematica(&data) {
+        let schematic = match litematica::parse_schematic(&data, &file_arg) {
             Ok(s) => s,
             Err(e) => {
                 sender.send_message(msg_error(&format!("Parse error: {e}")));
@@ -183,10 +236,13 @@ impl CommandHandler for LoadHandler {
             }
         };
 
+        let config = get_config();
+        let fallback = resolve_fallback_block(&config);
+
         let palette_map: Vec<Vec<Option<u16>>> = schematic
             .regions
             .iter()
-            .map(|r| resolve_palette(&r.palette))
+            .map(|r| resolve_palette(&r.palette, fallback))
             .collect();
 
         let total_blocks: usize = schematic
@@ -197,6 +253,15 @@ impl CommandHandler for LoadHandler {
                 (s[0] * s[1] * s[2]) as usize
             })
             .sum();
+
+        let mut unresolved_count = 0usize;
+        for (i, pm) in palette_map.iter().enumerate() {
+            for (j, entry) in pm.iter().enumerate() {
+                if entry.is_none() && schematic.regions[i].palette[j].name != "minecraft:air" {
+                    unresolved_count += 1;
+                }
+            }
+        }
 
         let region_count = schematic.regions.len();
         let name = schematic.name.clone();
@@ -211,6 +276,17 @@ impl CommandHandler for LoadHandler {
         sender.send_message(msg_success(&format!(
             "Loaded '{name}' - {region_count} region(s), {total_blocks} blocks"
         )));
+
+        if unresolved_count > 0 && config.fallback_block == "skip" {
+            sender.send_message(msg_warn(&format!(
+                "{unresolved_count} block type(s) skipped (unsupported). Use /schematic info for details."
+            )));
+        } else if unresolved_count > 0 {
+            sender.send_message(msg_warn(&format!(
+                "{unresolved_count} block type(s) replaced with {}. Use /schematic info for details.",
+                config.fallback_block
+            )));
+        }
 
         Ok(0)
     }
@@ -235,8 +311,9 @@ impl CommandHandler for PasteHandler {
         };
         let player_world = player.get_world();
 
+        let config = get_config();
         let current = ACTIVE_PASTES.load(Ordering::Relaxed);
-        if current >= MAX_CONCURRENT_PASTES {
+        if current >= config.max_concurrent_pastes {
             sender.send_message(msg_error("Server is busy. Please wait and try again."));
             return Ok(1);
         }
@@ -320,7 +397,7 @@ impl CommandHandler for PasteHandler {
 
         sender.send_message(msg_info(&format!("Pasting {total} blocks...")));
 
-        schedule_paste(work_queue, tile_entities, dimension, total, player_name);
+        schedule_paste(work_queue, tile_entities, dimension, config.blocks_per_tick);
 
         Ok(0)
     }
@@ -340,8 +417,7 @@ fn schedule_paste(
     queue: Vec<BlockPlacement>,
     tile_entities: Vec<TileEntityPlacement>,
     dimension: String,
-    total: usize,
-    player_name: String,
+    blocks_per_tick: usize,
 ) {
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
@@ -365,7 +441,7 @@ fn schedule_paste(
 
         let mut queue_guard = queue_clone.lock().unwrap();
         if !queue_guard.is_empty() {
-            let batch_end = std::cmp::min(BLOCKS_PER_TICK, queue_guard.len());
+            let batch_end = std::cmp::min(blocks_per_tick, queue_guard.len());
             let batch: Vec<BlockPlacement> = queue_guard.drain(..batch_end).collect();
             let remaining = queue_guard.len();
             drop(queue_guard);
@@ -382,9 +458,6 @@ fn schedule_paste(
                 drop(te_guard);
 
                 ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
-                server.broadcast(&format!(
-                    "{player_name}'s schematic paste complete! {total} blocks placed."
-                ));
 
                 let tid = *task_id_clone.lock().unwrap();
                 pumpkin_plugin_api::scheduler::cancel_task(tid);
@@ -396,7 +469,7 @@ fn schedule_paste(
 }
 
 struct ListHandler {
-    data_folder: String,
+    schematics_dir: String,
 }
 
 impl CommandHandler for ListHandler {
@@ -406,7 +479,7 @@ impl CommandHandler for ListHandler {
         _server: Server,
         _args: ConsumedArgs,
     ) -> Result<i32, CommandError> {
-        let entries = match std::fs::read_dir(&self.data_folder) {
+        let entries = match std::fs::read_dir(&self.schematics_dir) {
             Ok(e) => e,
             Err(_) => {
                 sender.send_message(msg_warn("No schematics found."));
@@ -419,7 +492,7 @@ impl CommandHandler for ListHandler {
             .filter(|e| {
                 e.path()
                     .extension()
-                    .is_some_and(|ext| ext == "litematica" || ext == "litematic")
+                    .is_some_and(|ext| ext == "litematica" || ext == "litematic" || ext == "schem")
             })
             .filter_map(|e| e.file_name().into_string().ok())
             .collect();
@@ -481,7 +554,9 @@ impl CommandHandler for InfoHandler {
             let unresolved: Vec<&str> = loaded.palette_map[i]
                 .iter()
                 .zip(region.palette.iter())
-                .filter(|(state, _)| state.is_none())
+                .filter(|(state, entry)| {
+                    state.is_none() && entry.name != "minecraft:air" && entry.name != "air"
+                })
                 .map(|(_, entry)| entry.name.as_str())
                 .collect();
 
@@ -516,6 +591,27 @@ impl CommandHandler for StatusHandler {
                 "{active} paste operation(s) in progress."
             )));
         }
+        Ok(0)
+    }
+}
+
+struct ReloadHandler {
+    data_folder: String,
+}
+
+impl CommandHandler for ReloadHandler {
+    fn handle(
+        &self,
+        sender: CommandSender,
+        _server: Server,
+        _args: ConsumedArgs,
+    ) -> Result<i32, CommandError> {
+        let config = load_config(&self.data_folder);
+        *CONFIG.lock().unwrap() = Some(config.clone());
+        sender.send_message(msg_success(&format!(
+            "Config reloaded. Fallback: {}, blocks/tick: {}, max pastes: {}",
+            config.fallback_block, config.blocks_per_tick, config.max_concurrent_pastes
+        )));
         Ok(0)
     }
 }
