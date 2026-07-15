@@ -15,7 +15,7 @@ use pumpkin_plugin_api::{
     permission::{Permission, PermissionDefault, PermissionLevel},
     permissions,
     text::TextComponent,
-    world::{self, BlockFlags},
+    world,
     register_plugin,
 };
 
@@ -441,6 +441,32 @@ struct TileEntityPlacement {
     nbt: Vec<u8>,
 }
 
+struct ChunkBatch {
+    chunk_x: i32,
+    chunk_z: i32,
+    blocks: Vec<(BlockPos, u16)>,
+}
+
+fn build_chunk_batches(queue: Vec<BlockPlacement>) -> Vec<ChunkBatch> {
+    let mut chunk_map: HashMap<(i32, i32), Vec<(BlockPos, u16)>> = HashMap::new();
+    for p in queue {
+        let cx = p.pos.x.div_euclid(16);
+        let cz = p.pos.z.div_euclid(16);
+        chunk_map.entry((cx, cz)).or_default().push((p.pos, p.state_id));
+    }
+    chunk_map
+        .into_iter()
+        .map(|((cx, cz), blocks)| ChunkBatch { chunk_x: cx, chunk_z: cz, blocks })
+        .collect()
+}
+
+struct PasteState {
+    batches: Vec<ChunkBatch>,
+    batch_idx: usize,
+    block_offset: usize,
+    tile_entities: Vec<TileEntityPlacement>,
+}
+
 fn schedule_paste(
     queue: Vec<BlockPlacement>,
     tile_entities: Vec<TileEntityPlacement>,
@@ -452,16 +478,15 @@ fn schedule_paste(
 ) {
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
-    let queue = std::sync::Arc::new(Mutex::new(queue));
-    let te_queue = std::sync::Arc::new(Mutex::new(tile_entities));
-    let queue_clone = queue.clone();
-    let te_clone = te_queue.clone();
+    let state = std::sync::Arc::new(Mutex::new(PasteState {
+        batches: build_chunk_batches(queue),
+        batch_idx: 0,
+        block_offset: 0,
+        tile_entities,
+    }));
+    let state_clone = state.clone();
     let task_id = std::sync::Arc::new(Mutex::new(0u32));
     let task_id_clone = task_id.clone();
-
-    let flags = BlockFlags::FORCE_STATE
-        | BlockFlags::SKIP_DROPS
-        | BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT;
 
     let id = pumpkin_plugin_api::scheduler::schedule_repeating_task(0, 1, move |server| {
         let world = match server.get_world_by_name(&dimension) {
@@ -474,39 +499,67 @@ fn schedule_paste(
             }
         };
 
-        let mut queue_guard = queue_clone.lock().unwrap();
-        if !queue_guard.is_empty() {
-            let batch_end = std::cmp::min(blocks_per_tick, queue_guard.len());
-            let batch: Vec<BlockPlacement> = queue_guard.drain(..batch_end).collect();
-            let remaining = queue_guard.len();
-            drop(queue_guard);
+        let mut s = state_clone.lock().unwrap();
+        let mut remaining = blocks_per_tick;
 
-            for placement in &batch {
-                world.set_block_state(placement.pos, placement.state_id, flags);
+        while remaining > 0 && s.batch_idx < s.batches.len() {
+            let batch = &s.batches[s.batch_idx];
+            let blocks_left = batch.blocks.len() - s.block_offset;
+            let to_place = std::cmp::min(remaining, blocks_left);
+
+            match world.get_chunk(batch.chunk_x, batch.chunk_z) {
+                Some(chunk) => {
+                    for &(pos, state_id) in &batch.blocks[s.block_offset..s.block_offset + to_place] {
+                        let local = BlockPos {
+                            x: pos.x.rem_euclid(16),
+                            y: pos.y,
+                            z: pos.z.rem_euclid(16),
+                        };
+                        chunk.set_block_state(local, state_id);
+                    }
+                }
+                None => {
+                    // Chunk not loaded — use world.set_block_state as fallback
+                    let flags = world::BlockFlags::FORCE_STATE
+                        | world::BlockFlags::SKIP_DROPS
+                        | world::BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
+                        | world::BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
+                    for &(pos, state_id) in &batch.blocks[s.block_offset..s.block_offset + to_place] {
+                        world.set_block_state(pos, state_id, flags);
+                    }
+                }
             }
 
-            if remaining == 0 {
-                let mut te_guard = te_clone.lock().unwrap();
-                for te in te_guard.drain(..) {
-                    let _ = world.set_block_entity_nbt(te.pos, &te.nbt);
-                }
-                drop(te_guard);
+            remaining -= to_place;
 
-                ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
-
-                if let Some(player) = server.get_player_by_name(&player_name) {
-                    player.send_system_message(
-                        msg_success(&format!(
-                            "Pasted '{}' at ({}, {}, {})",
-                            schematic_name, origin.x, origin.y, origin.z
-                        )),
-                        false,
-                    );
-                }
-
-                let tid = *task_id_clone.lock().unwrap();
-                pumpkin_plugin_api::scheduler::cancel_task(tid);
+            if s.block_offset + to_place >= batch.blocks.len() {
+                s.batch_idx += 1;
+                s.block_offset = 0;
+            } else {
+                s.block_offset += to_place;
             }
+        }
+
+        if s.batch_idx >= s.batches.len() {
+            for te in s.tile_entities.drain(..) {
+                let _ = world.set_block_entity_nbt(te.pos, &te.nbt);
+            }
+            drop(s);
+
+            ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
+
+            if let Some(player) = server.get_player_by_name(&player_name) {
+                player.send_system_message(
+                    msg_success(&format!(
+                        "Pasted '{}' at ({}, {}, {})",
+                        schematic_name, origin.x, origin.y, origin.z
+                    )),
+                    false,
+                );
+            }
+
+            let tid = *task_id_clone.lock().unwrap();
+            pumpkin_plugin_api::scheduler::cancel_task(tid);
         }
     });
 
