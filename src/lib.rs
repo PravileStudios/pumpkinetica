@@ -9,7 +9,7 @@ use pumpkin_plugin_api::{
     Context, Plugin, PluginMetadata, Result, Server,
     command::{CommandError, CommandNode, CommandSender, ConsumedArgs},
     command_wit::{Arg, ArgumentType, StringType},
-    common::BlockPos,
+    common::{BlockPos, NamedColor},
     permission::{Permission, PermissionDefault, PermissionLevel},
     permissions,
     text::TextComponent,
@@ -21,6 +21,7 @@ use litematica::{PaletteEntry, Schematic};
 
 const BLOCKS_PER_TICK: usize = 4096;
 const MAX_CONCURRENT_PASTES: usize = 4;
+const PREFIX: &str = "[PSchematics] ";
 
 struct SchematicPasterPlugin;
 
@@ -32,6 +33,32 @@ struct LoadedSchematic {
     palette_map: Vec<Vec<Option<u16>>>,
 }
 
+fn msg(text: &str, color: NamedColor) -> TextComponent {
+    let prefix = TextComponent::text(PREFIX);
+    prefix.color_named(NamedColor::Gold);
+    prefix.bold(true);
+    let body = TextComponent::text(text);
+    body.color_named(color);
+    prefix.add_child(body);
+    prefix
+}
+
+fn msg_error(text: &str) -> TextComponent {
+    msg(text, NamedColor::Red)
+}
+
+fn msg_success(text: &str) -> TextComponent {
+    msg(text, NamedColor::Green)
+}
+
+fn msg_info(text: &str) -> TextComponent {
+    msg(text, NamedColor::Aqua)
+}
+
+fn msg_warn(text: &str) -> TextComponent {
+    msg(text, NamedColor::Yellow)
+}
+
 impl Plugin for SchematicPasterPlugin {
     fn new() -> Self {
         SchematicPasterPlugin
@@ -39,10 +66,10 @@ impl Plugin for SchematicPasterPlugin {
 
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
-            name: "schematic-paster".into(),
+            name: "pschematics".into(),
             version: "0.2.0".into(),
             authors: vec!["PumpkinMC".into()],
-            description: "Paste .litematica schematics into the world".into(),
+            description: "Load and paste .litematica schematics into the world".into(),
             dependencies: vec![],
             permissions: vec![
                 permissions::FS_READ_DATA.into(),
@@ -85,7 +112,7 @@ impl Plugin for SchematicPasterPlugin {
         cmd.then(status_node);
 
         let _ = context.register_permission(&Permission {
-            node: "schematic-paster:command.schematic".into(),
+            node: "pschematics:command.schematic".into(),
             description: "Allows use of /schematic commands".into(),
             default: PermissionDefault::Op(PermissionLevel::Two),
             children: vec![],
@@ -143,7 +170,7 @@ impl CommandHandler for LoadHandler {
         let data = match std::fs::read(&path) {
             Ok(d) => d,
             Err(e) => {
-                sender.send_error(TextComponent::text(&format!("Failed to read file: {e}")));
+                sender.send_message(msg_error(&format!("Failed to read file: {e}")));
                 return Ok(1);
             }
         };
@@ -151,7 +178,7 @@ impl CommandHandler for LoadHandler {
         let schematic = match litematica::parse_litematica(&data) {
             Ok(s) => s,
             Err(e) => {
-                sender.send_error(TextComponent::text(&format!("Parse error: {e}")));
+                sender.send_message(msg_error(&format!("Parse error: {e}")));
                 return Ok(1);
             }
         };
@@ -181,8 +208,8 @@ impl CommandHandler for LoadHandler {
             }
         }
 
-        sender.send_message(TextComponent::text(&format!(
-            "Loaded '{name}': {region_count} region(s), {total_blocks} blocks"
+        sender.send_message(msg_success(&format!(
+            "Loaded '{name}' - {region_count} region(s), {total_blocks} blocks"
         )));
 
         Ok(0)
@@ -210,9 +237,7 @@ impl CommandHandler for PasteHandler {
 
         let current = ACTIVE_PASTES.load(Ordering::Relaxed);
         if current >= MAX_CONCURRENT_PASTES {
-            sender.send_error(TextComponent::text(&format!(
-                "Too many active pastes ({current}/{MAX_CONCURRENT_PASTES}). Wait for one to finish."
-            )));
+            sender.send_message(msg_error("Server is busy. Please wait and try again."));
             return Ok(1);
         }
 
@@ -220,9 +245,9 @@ impl CommandHandler for PasteHandler {
         let loaded = map
             .as_ref()
             .and_then(|m| m.get(&player_name))
-            .ok_or(CommandError::CommandFailed(TextComponent::text(
-                "No schematic loaded. Use /schematic load <file>",
-            )))?;
+            .ok_or_else(|| CommandError::CommandFailed(
+                msg_error("No schematic loaded. Use /schematic load <file>"),
+            ))?;
 
         let mut work_queue: Vec<BlockPlacement> = Vec::new();
         let mut tile_entities: Vec<TileEntityPlacement> = Vec::new();
@@ -289,18 +314,11 @@ impl CommandHandler for PasteHandler {
         }
 
         let total = work_queue.len();
-        let te_count = tile_entities.len();
         drop(map);
 
-        // Use get_dimension() which returns "minecraft:overworld" etc,
-        // matching what server.get_world_by_name() expects
         let dimension = player_world.get_dimension();
 
-        sender.send_message(TextComponent::text(&format!(
-            "Pasting {total} blocks, {te_count} tile entities ({} ticks)... [{}/{MAX_CONCURRENT_PASTES} active]",
-            (total + BLOCKS_PER_TICK - 1) / BLOCKS_PER_TICK,
-            current + 1,
-        )));
+        sender.send_message(msg_info(&format!("Pasting {total} blocks...")));
 
         schedule_paste(work_queue, tile_entities, dimension, total, player_name);
 
@@ -364,9 +382,8 @@ fn schedule_paste(
                 drop(te_guard);
 
                 ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
-                let active = ACTIVE_PASTES.load(Ordering::Relaxed);
                 server.broadcast(&format!(
-                    "{player_name}'s schematic paste complete: {total} blocks placed [{active}/{MAX_CONCURRENT_PASTES} active]"
+                    "{player_name}'s schematic paste complete! {total} blocks placed."
                 ));
 
                 let tid = *task_id_clone.lock().unwrap();
@@ -392,7 +409,7 @@ impl CommandHandler for ListHandler {
         let entries = match std::fs::read_dir(&self.data_folder) {
             Ok(e) => e,
             Err(_) => {
-                sender.send_message(TextComponent::text("No schematics found"));
+                sender.send_message(msg_warn("No schematics found."));
                 return Ok(0);
             }
         };
@@ -410,15 +427,15 @@ impl CommandHandler for ListHandler {
         files.sort();
 
         if files.is_empty() {
-            sender.send_message(TextComponent::text(
-                "No .litematica files in data folder",
-            ));
+            sender.send_message(msg_warn("No schematics found."));
         } else {
-            sender.send_message(TextComponent::text(&format!(
-                "Schematics ({}): {}",
-                files.len(),
-                files.join(", ")
-            )));
+            let header = msg_info(&format!("Available schematics ({}):", files.len()));
+            sender.send_message(header);
+            for file in &files {
+                let entry = TextComponent::text(&format!("  - {file}"));
+                entry.color_named(NamedColor::Gray);
+                sender.send_message(entry);
+            }
         }
 
         Ok(0)
@@ -441,21 +458,25 @@ impl CommandHandler for InfoHandler {
         let loaded = map
             .as_ref()
             .and_then(|m| m.get(&player_name))
-            .ok_or(CommandError::CommandFailed(TextComponent::text(
-                "No schematic loaded",
-            )))?;
+            .ok_or_else(|| CommandError::CommandFailed(
+                msg_error("No schematic loaded."),
+            ))?;
 
         let schematic = &loaded.schematic;
-        let mut msg = format!("Schematic: {}\n", schematic.name);
+
+        let header = msg_info(&format!("Schematic: {}", schematic.name));
+        sender.send_message(header);
 
         for (i, region) in schematic.regions.iter().enumerate() {
             let [sx, sy, sz] = region.abs_size();
-            msg.push_str(&format!(
-                "  Region '{}': {}x{}x{} ({} palette entries, {} tile entities)\n",
+            let region_msg = TextComponent::text(&format!(
+                "  {} - {}x{}x{}, {} blocks, {} tile entities",
                 region.name, sx, sy, sz,
                 region.palette.len(),
                 region.tile_entities.len(),
             ));
+            region_msg.color_named(NamedColor::Gray);
+            sender.send_message(region_msg);
 
             let unresolved: Vec<&str> = loaded.palette_map[i]
                 .iter()
@@ -465,14 +486,15 @@ impl CommandHandler for InfoHandler {
                 .collect();
 
             if !unresolved.is_empty() {
-                msg.push_str(&format!(
-                    "  Unresolved blocks: {}\n",
+                let warn = TextComponent::text(&format!(
+                    "    Unsupported: {}",
                     unresolved.join(", ")
                 ));
+                warn.color_named(NamedColor::Yellow);
+                sender.send_message(warn);
             }
         }
 
-        sender.send_message(TextComponent::text(&msg));
         Ok(0)
     }
 }
@@ -487,9 +509,13 @@ impl CommandHandler for StatusHandler {
         _args: ConsumedArgs,
     ) -> Result<i32, CommandError> {
         let active = ACTIVE_PASTES.load(Ordering::Relaxed);
-        sender.send_message(TextComponent::text(&format!(
-            "Active pastes: {active}/{MAX_CONCURRENT_PASTES}"
-        )));
+        if active == 0 {
+            sender.send_message(msg_info("No active paste operations."));
+        } else {
+            sender.send_message(msg_warn(&format!(
+                "{active} paste operation(s) in progress."
+            )));
+        }
         Ok(0)
     }
 }
