@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Pumpkin (plugin API dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: Pumpkin-MC/Pumpkin
+          path: ../Pumpkin
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-wasip1
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --target wasm32-wasip1 -- -D warnings
+
+      - name: Build
+        run: cargo build --target wasm32-wasip1 --release
+
+  build:
+    name: Build WASM Component
+    runs-on: ubuntu-latest
+    needs: check
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Pumpkin
+        uses: actions/checkout@v4
+        with:
+          repository: Pumpkin-MC/Pumpkin
+          path: ../Pumpkin
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-wasip1
+
+      - name: Install wasm-tools
+        run: cargo install wasm-tools
+
+      - name: Build
+        run: cargo build --target wasm32-wasip1 --release
+
+      - name: Download WASI adapter
+        run: |
+          curl -LO https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.0/wasi_snapshot_preview1.reactor.wasm
+
+      - name: Componentize
+        run: |
+          wasm-tools component new \
+            target/wasm32-wasip1/release/pschematics.wasm \
+            -o pschematics.wasm \
+            --adapt wasi_snapshot_preview1.reactor.wasm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pschematics.wasm
+          path: pschematics.wasm

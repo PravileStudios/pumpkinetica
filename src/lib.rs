@@ -21,6 +21,8 @@ use pumpkin_plugin_api::{
 
 use litematica::{PaletteEntry, Schematic};
 
+const PLUGIN_NAME: &str = "pschematics";
+const PLUGIN_VERSION: &str = "0.3.0";
 const PREFIX: &str = "[PSchematics] ";
 
 struct SchematicPasterPlugin;
@@ -101,8 +103,8 @@ impl Plugin for SchematicPasterPlugin {
 
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
-            name: "pschematics".into(),
-            version: "0.3.0".into(),
+            name: PLUGIN_NAME.into(),
+            version: PLUGIN_VERSION.into(),
             authors: vec!["PumpkinMC".into()],
             description: "Load and paste .litematica and .schem schematics into the world".into(),
             dependencies: vec![],
@@ -146,19 +148,23 @@ impl Plugin for SchematicPasterPlugin {
             data_folder,
         });
 
+        let help_node = CommandNode::literal("help").execute(HelpHandler);
+
         let cmd = Command::new(
             &["schematic".into(), "schem".into()],
-            "Load and paste .litematica schematics",
+            "Load and paste .litematica and .schem schematics",
         );
+        let cmd = cmd.execute(HelpHandler);
         cmd.then(load_node);
         cmd.then(paste_node);
         cmd.then(list_node);
         cmd.then(info_node);
         cmd.then(status_node);
         cmd.then(reload_node);
+        cmd.then(help_node);
 
         let _ = context.register_permission(&Permission {
-            node: "pschematics:command.schematic".into(),
+            node: format!("{PLUGIN_NAME}:command.schematic"),
             description: "Allows use of /schematic commands".into(),
             default: PermissionDefault::Op(PermissionLevel::Two),
             children: vec![],
@@ -591,6 +597,39 @@ impl CommandHandler for StatusHandler {
                 "{active} paste operation(s) in progress."
             )));
         }
+        Ok(0)
+    }
+}
+
+struct HelpHandler;
+
+impl CommandHandler for HelpHandler {
+    fn handle(
+        &self,
+        sender: CommandSender,
+        _server: Server,
+        _args: ConsumedArgs,
+    ) -> Result<i32, CommandError> {
+        sender.send_message(msg_info(&format!("PSchematics v{PLUGIN_VERSION}")));
+
+        let cmds = [
+            ("/schematic load <file>", "Load a schematic file"),
+            ("/schematic paste", "Paste loaded schematic at your position"),
+            ("/schematic list", "List available schematic files"),
+            ("/schematic info", "Show details of loaded schematic"),
+            ("/schematic status", "Show active paste operations"),
+            ("/schematic reload", "Reload config from disk"),
+        ];
+
+        for (cmd, desc) in &cmds {
+            let line = TextComponent::text(&format!("  {cmd}"));
+            line.color_named(NamedColor::Green);
+            let detail = TextComponent::text(&format!(" - {desc}"));
+            detail.color_named(NamedColor::Gray);
+            line.add_child(detail);
+            sender.send_message(line);
+        }
+
         Ok(0)
     }
 }

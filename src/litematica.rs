@@ -496,8 +496,16 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
     let height = get_short(schem_data, "Height").ok_or("Missing Height")? as i32;
     let length = get_short(schem_data, "Length").ok_or("Missing Length")? as i32;
 
-    let palette_compound = get_compound(schem_data, "Palette")
-        .ok_or("Missing Palette")?;
+    let (palette_compound, block_data_bytes) =
+        if let Some(NbtValue::Compound(blocks)) = schem_data.get("Blocks") {
+            let p = get_compound(blocks, "Palette").ok_or("Missing Blocks.Palette")?;
+            let d = get_byte_array(blocks, "Data").ok_or("Missing Blocks.Data")?;
+            (p, d)
+        } else {
+            let p = get_compound(schem_data, "Palette").ok_or("Missing Palette")?;
+            let d = get_byte_array(schem_data, "BlockData").ok_or("Missing BlockData")?;
+            (p, d)
+        };
 
     let mut palette_entries: Vec<(i32, PaletteEntry)> = Vec::new();
     for (block_str, idx_val) in palette_compound {
@@ -523,16 +531,17 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
         palette[idx as usize] = entry;
     }
 
-    let block_data_bytes = get_byte_array(schem_data, "BlockData")
-        .ok_or("Missing BlockData")?;
-
     let total_blocks = (width * height * length) as usize;
     let block_indices = decode_varint_array(&block_data_bytes, total_blocks)?;
 
     let bits = std::cmp::max(2, 32 - (palette.len() as u32).saturating_sub(1).leading_zeros());
     let block_data = pack_indices_to_longs(&block_indices, bits);
 
-    let tile_entities = parse_schem_block_entities(schem_data);
+    let tile_entities = if let Some(NbtValue::Compound(blocks)) = schem_data.get("Blocks") {
+        parse_schem_block_entities(blocks)
+    } else {
+        parse_schem_block_entities(schem_data)
+    };
 
     let name = filename
         .trim_end_matches(".schem")
