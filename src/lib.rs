@@ -397,13 +397,18 @@ impl CommandHandler for PasteHandler {
         }
 
         let total = work_queue.len();
+        let schematic_name = loaded.schematic.name.clone();
         drop(map);
 
         let dimension = player_world.get_dimension();
 
-        sender.send_message(msg_info(&format!("Pasting {total} blocks...")));
+        sender.send_message(msg_info(&format!("Pasting '{schematic_name}' ({total} blocks)...")));
 
-        schedule_paste(work_queue, tile_entities, dimension, config.blocks_per_tick);
+        schedule_paste(
+            work_queue, tile_entities, dimension,
+            config.blocks_per_tick, player_name,
+            schematic_name, origin,
+        );
 
         Ok(0)
     }
@@ -424,6 +429,9 @@ fn schedule_paste(
     tile_entities: Vec<TileEntityPlacement>,
     dimension: String,
     blocks_per_tick: usize,
+    player_name: String,
+    schematic_name: String,
+    origin: BlockPos,
 ) {
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
@@ -441,7 +449,12 @@ fn schedule_paste(
     let id = pumpkin_plugin_api::scheduler::schedule_repeating_task(0, 1, move |server| {
         let world = match server.get_world_by_name(&dimension) {
             Some(w) => w,
-            None => return,
+            None => {
+                ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
+                let tid = *task_id_clone.lock().unwrap();
+                pumpkin_plugin_api::scheduler::cancel_task(tid);
+                return;
+            }
         };
 
         let mut queue_guard = queue_clone.lock().unwrap();
@@ -463,6 +476,16 @@ fn schedule_paste(
                 drop(te_guard);
 
                 ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
+
+                if let Some(player) = server.get_player_by_name(&player_name) {
+                    player.send_system_message(
+                        msg_success(&format!(
+                            "Pasted '{}' at ({}, {}, {})",
+                            schematic_name, origin.x, origin.y, origin.z
+                        )),
+                        false,
+                    );
+                }
 
                 let tid = *task_id_clone.lock().unwrap();
                 pumpkin_plugin_api::scheduler::cancel_task(tid);
