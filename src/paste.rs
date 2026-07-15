@@ -5,7 +5,8 @@ use std::sync::atomic::Ordering;
 use pumpkin_plugin_api::common::BlockPos;
 use pumpkin_plugin_api::world;
 
-use crate::{ACTIVE_PASTES, msg_success};
+use crate::history::{BlockSnapshot, PlayerHistory, UndoEntry};
+use crate::{ACTIVE_PASTES, PLAYER_HISTORIES, get_config, msg_success};
 
 pub(crate) struct BlockPlacement {
     pub pos: BlockPos,
@@ -28,6 +29,9 @@ struct PasteState {
     batch_idx: usize,
     block_offset: usize,
     tile_entities: Vec<TileEntityPlacement>,
+    record_undo: bool,
+    old_snapshots: Vec<BlockSnapshot>,
+    new_snapshots: Vec<BlockSnapshot>,
 }
 
 fn build_chunk_batches(queue: Vec<BlockPlacement>) -> Vec<ChunkBatch> {
@@ -59,6 +63,26 @@ pub(crate) fn schedule_paste(
     schematic_name: String,
     origin: BlockPos,
 ) {
+    schedule_block_op(
+        queue,
+        tile_entities,
+        dimension,
+        blocks_per_tick,
+        player_name,
+        format!("Paste '{schematic_name}' at ({}, {}, {})", origin.x, origin.y, origin.z),
+        true,
+    );
+}
+
+pub(crate) fn schedule_block_op(
+    queue: Vec<BlockPlacement>,
+    tile_entities: Vec<TileEntityPlacement>,
+    dimension: String,
+    blocks_per_tick: usize,
+    player_name: String,
+    description: String,
+    record_undo: bool,
+) {
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
     let state = std::sync::Arc::new(Mutex::new(PasteState {
@@ -66,10 +90,16 @@ pub(crate) fn schedule_paste(
         batch_idx: 0,
         block_offset: 0,
         tile_entities,
+        record_undo,
+        old_snapshots: Vec::new(),
+        new_snapshots: Vec::new(),
     }));
     let state_clone = state.clone();
     let task_id = std::sync::Arc::new(Mutex::new(0u32));
     let task_id_clone = task_id.clone();
+    let description_clone = description.clone();
+    let dimension_clone = dimension.clone();
+    let player_name_clone = player_name.clone();
 
     let id = pumpkin_plugin_api::scheduler::schedule_repeating_task(0, 1, move |server| {
         let world = match server.get_world_by_name(&dimension) {
@@ -86,19 +116,35 @@ pub(crate) fn schedule_paste(
         let mut remaining = blocks_per_tick;
 
         while remaining > 0 && s.batch_idx < s.batches.len() {
-            let batch = &s.batches[s.batch_idx];
-            let blocks_left = batch.blocks.len() - s.block_offset;
+            let chunk_x = s.batches[s.batch_idx].chunk_x;
+            let chunk_z = s.batches[s.batch_idx].chunk_z;
+            let batch_len = s.batches[s.batch_idx].blocks.len();
+            let blocks_left = batch_len - s.block_offset;
             let to_place = std::cmp::min(remaining, blocks_left);
+            let offset = s.block_offset;
+            let record_undo = s.record_undo;
 
-            match world.get_chunk(batch.chunk_x, batch.chunk_z) {
+            let block_slice: Vec<(BlockPos, u16)> =
+                s.batches[s.batch_idx].blocks[offset..offset + to_place].to_vec();
+
+            match world.get_chunk(chunk_x, chunk_z) {
                 Some(chunk) => {
-                    for &(pos, state_id) in &batch.blocks[s.block_offset..s.block_offset + to_place]
-                    {
+                    for &(pos, state_id) in &block_slice {
                         let local = BlockPos {
                             x: pos.x.rem_euclid(16),
                             y: pos.y,
                             z: pos.z.rem_euclid(16),
                         };
+
+                        if record_undo {
+                            let old_id = chunk.get_block_state_id(local);
+                            s.old_snapshots.push(BlockSnapshot {
+                                pos,
+                                state_id: old_id,
+                            });
+                            s.new_snapshots.push(BlockSnapshot { pos, state_id });
+                        }
+
                         chunk.set_block_state(local, state_id);
                     }
                 }
@@ -107,8 +153,16 @@ pub(crate) fn schedule_paste(
                         | world::BlockFlags::SKIP_DROPS
                         | world::BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
                         | world::BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
-                    for &(pos, state_id) in &batch.blocks[s.block_offset..s.block_offset + to_place]
-                    {
+                    for &(pos, state_id) in &block_slice {
+                        if record_undo {
+                            let old_id = world.get_block_state_id(pos);
+                            s.old_snapshots.push(BlockSnapshot {
+                                pos,
+                                state_id: old_id,
+                            });
+                            s.new_snapshots.push(BlockSnapshot { pos, state_id });
+                        }
+
                         world.set_block_state(pos, state_id, flags);
                     }
                 }
@@ -116,7 +170,7 @@ pub(crate) fn schedule_paste(
 
             remaining -= to_place;
 
-            if s.block_offset + to_place >= batch.blocks.len() {
+            if offset + to_place >= batch_len {
                 s.batch_idx += 1;
                 s.block_offset = 0;
             } else {
@@ -128,16 +182,30 @@ pub(crate) fn schedule_paste(
             for te in s.tile_entities.drain(..) {
                 let _ = world.set_block_entity_nbt(te.pos, &te.nbt);
             }
+
+            if s.record_undo && !s.old_snapshots.is_empty() {
+                let config = get_config();
+                let entry = UndoEntry {
+                    description: description_clone.clone(),
+                    dimension: dimension_clone.clone(),
+                    old_states: std::mem::take(&mut s.old_snapshots),
+                    new_states: std::mem::take(&mut s.new_snapshots),
+                };
+                if let Some(ref mut histories) = *PLAYER_HISTORIES.lock().unwrap() {
+                    let history = histories
+                        .entry(player_name_clone.clone())
+                        .or_insert_with(PlayerHistory::new);
+                    history.push_undo(entry, config.max_undo_history);
+                }
+            }
+
             drop(s);
 
             ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
 
             if let Some(player) = server.get_player_by_name(&player_name) {
                 player.send_system_message(
-                    msg_success(&format!(
-                        "Pasted '{}' at ({}, {}, {})",
-                        schematic_name, origin.x, origin.y, origin.z
-                    )),
+                    msg_success(&format!("Completed: {description}")),
                     false,
                 );
             }

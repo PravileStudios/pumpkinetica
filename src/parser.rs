@@ -1,7 +1,9 @@
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 
+use flate2::Compression;
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 
 #[derive(Debug)]
 pub struct Schematic {
@@ -661,4 +663,60 @@ fn parse_schem_block_entities(schem_data: &HashMap<String, NbtValue>) -> Vec<Til
             })
         })
         .collect()
+}
+
+// ── .schem Save ─────────────────────────────────────────────────────
+
+pub fn build_schem_nbt(
+    palette_strings: &HashMap<String, u16>,
+    indices: &[u16],
+    size: (i32, i32, i32),
+) -> NbtValue {
+    let mut palette_compound = HashMap::new();
+    for (name, &idx) in palette_strings {
+        palette_compound.insert(name.clone(), NbtValue::Int(idx as i32));
+    }
+
+    let block_data = encode_varint_array(indices);
+
+    let mut schematic_compound = HashMap::new();
+    schematic_compound.insert("Version".into(), NbtValue::Int(2));
+    schematic_compound.insert("DataVersion".into(), NbtValue::Int(3837));
+    schematic_compound.insert("Width".into(), NbtValue::Short(size.0 as i16));
+    schematic_compound.insert("Height".into(), NbtValue::Short(size.1 as i16));
+    schematic_compound.insert("Length".into(), NbtValue::Short(size.2 as i16));
+    schematic_compound.insert("Palette".into(), NbtValue::Compound(palette_compound));
+    schematic_compound.insert("BlockData".into(), NbtValue::ByteArray(block_data));
+    schematic_compound.insert(
+        "Metadata".into(),
+        NbtValue::Compound(HashMap::new()),
+    );
+
+    NbtValue::Compound(schematic_compound)
+}
+
+fn encode_varint_array(indices: &[u16]) -> Vec<i8> {
+    let mut result = Vec::with_capacity(indices.len());
+    for &idx in indices {
+        let mut value = idx as u32;
+        loop {
+            let mut byte = (value & 0x7F) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            result.push(byte as i8);
+            if value == 0 {
+                break;
+            }
+        }
+    }
+    result
+}
+
+pub fn write_schem_bytes(nbt: &NbtValue) -> Vec<u8> {
+    let raw = serialize_nbt_value(nbt);
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    let _ = encoder.write_all(&raw);
+    encoder.finish().unwrap_or_default()
 }
