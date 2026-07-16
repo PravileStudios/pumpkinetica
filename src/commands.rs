@@ -178,7 +178,7 @@ impl CommandHandler for PasteHandler {
             if let Some(ref map) = *clips
                 && let Some(clip) = map.get(&player_name)
             {
-                let work_queue = clip.to_work_queue(origin);
+                let (work_queue, tile_entities) = clip.to_work_queue(origin);
                 let total = work_queue.len();
                 let dimension = player_world.get_dimension();
 
@@ -186,7 +186,7 @@ impl CommandHandler for PasteHandler {
 
                 schedule_paste(
                     work_queue,
-                    vec![],
+                    tile_entities,
                     dimension,
                     config.blocks_per_tick,
                     player_name,
@@ -646,12 +646,13 @@ impl CommandHandler for CopyHandler {
 
         let world = player.get_world();
 
-        let blocks = read_selection_chunk_batched(&world, min, max, sx, sy, sz);
+        let (blocks, tile_entities) = read_selection_chunk_batched(&world, min, max, sx, sy, sz);
 
         let non_air = blocks.iter().filter(|&&b| b != 0).count();
 
         let clip = Clipboard {
             blocks,
+            tile_entities,
             size_x: sx,
             size_y: sy,
             size_z: sz,

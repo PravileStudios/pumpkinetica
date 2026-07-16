@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use pumpkin_plugin_api::common::BlockPos;
 use pumpkin_plugin_api::world::World;
 
-use crate::paste::BlockPlacement;
+use crate::paste::{BlockPlacement, TileEntityPlacement};
 use crate::{REVERSE_REGISTRY, resolve_and_register};
 
 pub(crate) struct Clipboard {
     pub blocks: Vec<u16>,
+    pub tile_entities: Vec<(BlockPos, Vec<u8>)>,
     pub size_x: i32,
     pub size_y: i32,
     pub size_z: i32,
@@ -19,7 +20,7 @@ impl Clipboard {
         (y * self.size_x * self.size_z + z * self.size_x + x) as usize
     }
 
-    pub fn to_work_queue(&self, origin: BlockPos) -> Vec<BlockPlacement> {
+    pub fn to_work_queue(&self, origin: BlockPos) -> (Vec<BlockPlacement>, Vec<TileEntityPlacement>) {
         let mut queue = Vec::with_capacity(self.blocks.len());
         for y in 0..self.size_y {
             for z in 0..self.size_z {
@@ -39,7 +40,19 @@ impl Clipboard {
                 }
             }
         }
-        queue
+
+        let te_queue = self.tile_entities.iter().map(|(rel_pos, nbt)| {
+            TileEntityPlacement {
+                pos: BlockPos {
+                    x: origin.x - self.offset.x + rel_pos.x,
+                    y: origin.y - self.offset.y + rel_pos.y,
+                    z: origin.z - self.offset.z + rel_pos.z,
+                },
+                nbt: nbt.clone(),
+            }
+        }).collect();
+
+        (queue, te_queue)
     }
 }
 
@@ -50,9 +63,10 @@ pub(crate) fn read_selection_chunk_batched(
     sx: i32,
     sy: i32,
     sz: i32,
-) -> Vec<u16> {
+) -> (Vec<u16>, Vec<(BlockPos, Vec<u8>)>) {
     let total = (sx * sy * sz) as usize;
     let mut blocks = vec![0u16; total];
+    let mut tile_entities = Vec::new();
 
     let min_cx = min.x.div_euclid(16);
     let max_cx = max.x.div_euclid(16);
@@ -76,6 +90,7 @@ pub(crate) fn read_selection_chunk_batched(
             for y in min.y..=max.y {
                 for z in overlap_min_z..=overlap_max_z {
                     for x in overlap_min_x..=overlap_max_x {
+                        let pos = BlockPos { x, y, z };
                         let state_id = match &chunk {
                             Some(c) => {
                                 let local = BlockPos {
@@ -85,20 +100,24 @@ pub(crate) fn read_selection_chunk_batched(
                                 };
                                 c.get_block_state_id(local)
                             }
-                            None => world.get_block_state_id(BlockPos { x, y, z }),
+                            None => world.get_block_state_id(pos),
                         };
                         let rel_x = x - min.x;
                         let rel_y = y - min.y;
                         let rel_z = z - min.z;
                         let idx = (rel_y * sx * sz + rel_z * sx + rel_x) as usize;
                         blocks[idx] = state_id;
+
+                        if let Some(nbt) = world.get_block_entity_nbt(pos) {
+                            tile_entities.push((BlockPos { x: rel_x, y: rel_y, z: rel_z }, nbt));
+                        }
                     }
                 }
             }
         }
     }
 
-    blocks
+    (blocks, tile_entities)
 }
 
 pub(crate) fn rotate_clipboard(clip: &mut Clipboard, degrees: i32) {
@@ -129,6 +148,18 @@ pub(crate) fn rotate_clipboard(clip: &mut Clipboard, degrees: i32) {
     clip.blocks = new_blocks;
     clip.size_x = new_sx;
     clip.size_z = new_sz;
+
+    for te in &mut clip.tile_entities {
+        let (tx, tz) = (te.0.x, te.0.z);
+        let (nx, nz) = match degrees {
+            90 => (sz - 1 - tz, tx),
+            180 => (sx - 1 - tx, sz - 1 - tz),
+            270 => (tz, sx - 1 - tx),
+            _ => unreachable!(),
+        };
+        te.0.x = nx;
+        te.0.z = nz;
+    }
 
     let (ox, oz) = (clip.offset.x, clip.offset.z);
     match degrees {
@@ -173,6 +204,13 @@ pub(crate) fn flip_clipboard(clip: &mut Clipboard, axis: FlipAxis) {
     }
 
     clip.blocks = new_blocks;
+
+    for te in &mut clip.tile_entities {
+        match axis {
+            FlipAxis::X => te.0.x = sx - 1 - te.0.x,
+            FlipAxis::Z => te.0.z = sz - 1 - te.0.z,
+        }
+    }
 
     match axis {
         FlipAxis::X => clip.offset.x = -(clip.offset.x),
