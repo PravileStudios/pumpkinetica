@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
@@ -18,43 +17,14 @@ pub(crate) struct TileEntityPlacement {
     pub nbt: Vec<u8>,
 }
 
-struct ChunkBatch {
-    chunk_x: i32,
-    chunk_z: i32,
-    blocks: Vec<(BlockPos, u16)>,
-}
-
 struct PasteState {
-    batches: Vec<ChunkBatch>,
-    batch_idx: usize,
-    block_offset: usize,
+    blocks: Vec<(BlockPos, u16)>,
+    block_idx: usize,
     tile_entities: Vec<TileEntityPlacement>,
     te_idx: usize,
     record_undo: bool,
     old_snapshots: Vec<BlockSnapshot>,
     new_snapshots: Vec<BlockSnapshot>,
-}
-
-fn build_chunk_batches(queue: Vec<BlockPlacement>) -> Vec<ChunkBatch> {
-    let estimated_chunks = (queue.len() / 256).max(16);
-    let mut chunk_map: HashMap<(i32, i32), Vec<(BlockPos, u16)>> =
-        HashMap::with_capacity(estimated_chunks);
-    for p in queue {
-        let cx = p.pos.x.div_euclid(16);
-        let cz = p.pos.z.div_euclid(16);
-        chunk_map
-            .entry((cx, cz))
-            .or_default()
-            .push((p.pos, p.state_id));
-    }
-    chunk_map
-        .into_iter()
-        .map(|((cx, cz), blocks)| ChunkBatch {
-            chunk_x: cx,
-            chunk_z: cz,
-            blocks,
-        })
-        .collect()
 }
 
 pub(crate) fn schedule_paste(
@@ -92,10 +62,10 @@ pub(crate) fn schedule_block_op(
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
     let total_blocks: usize = queue.len();
+    let blocks: Vec<(BlockPos, u16)> = queue.into_iter().map(|p| (p.pos, p.state_id)).collect();
     let state = std::sync::Arc::new(Mutex::new(PasteState {
-        batches: build_chunk_batches(queue),
-        batch_idx: 0,
-        block_offset: 0,
+        blocks,
+        block_idx: 0,
         tile_entities,
         te_idx: 0,
         record_undo,
@@ -129,78 +99,50 @@ pub(crate) fn schedule_block_op(
         };
 
         let mut s = state_clone.lock().unwrap();
-        let mut remaining = blocks_per_tick;
 
-        while remaining > 0 && s.batch_idx < s.batches.len() {
-            let bi = s.batch_idx;
-            let offset = s.block_offset;
-            let batch_len = s.batches[bi].blocks.len();
-            let blocks_left = batch_len - offset;
-            let to_place = std::cmp::min(remaining, blocks_left);
-            let record = s.record_undo;
+        let flags = world::BlockFlags::NOTIFY_LISTENERS
+            | world::BlockFlags::FORCE_STATE
+            | world::BlockFlags::SKIP_DROPS
+            | world::BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
+            | world::BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
 
-            let chunk_x = s.batches[bi].chunk_x;
-            let chunk_z = s.batches[bi].chunk_z;
-
-            match world.get_chunk(chunk_x, chunk_z) {
-                Some(chunk) => {
-                    for i in offset..offset + to_place {
-                        let (pos, state_id) = s.batches[bi].blocks[i];
-                        let local = BlockPos {
-                            x: pos.x.rem_euclid(16),
-                            y: pos.y,
-                            z: pos.z.rem_euclid(16),
-                        };
-
-                        if record {
-                            let old_id = chunk.get_block_state_id(local);
-                            s.old_snapshots.push(BlockSnapshot {
-                                pos,
-                                state_id: old_id,
-                            });
-                            s.new_snapshots.push(BlockSnapshot { pos, state_id });
-                        }
-
-                        chunk.set_block_state(local, state_id);
-                    }
-
-                    if offset + to_place >= batch_len {
-                        chunk.resend_to_players();
-                    }
-                }
-                None => {
-                    let flags = world::BlockFlags::FORCE_STATE
-                        | world::BlockFlags::SKIP_DROPS
-                        | world::BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
-                        | world::BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
-                    for i in offset..offset + to_place {
-                        let (pos, state_id) = s.batches[bi].blocks[i];
-
-                        if record {
-                            let old_id = world.get_block_state_id(pos);
-                            s.old_snapshots.push(BlockSnapshot {
-                                pos,
-                                state_id: old_id,
-                            });
-                            s.new_snapshots.push(BlockSnapshot { pos, state_id });
-                        }
-
-                        world.set_block_state(pos, state_id, flags);
-                    }
-                }
-            }
-
-            remaining -= to_place;
-
-            if offset + to_place >= batch_len {
-                s.batch_idx += 1;
-                s.block_offset = 0;
-            } else {
-                s.block_offset += to_place;
-            }
+        let first_tick = s.block_idx == 0;
+        if first_tick {
+            pumpkin_plugin_api::logging::log(
+                pumpkin_plugin_api::logging::LogLevel::Info,
+                &format!("[paste] task start: {} blocks queued", s.blocks.len()),
+            );
         }
 
-        if s.batch_idx >= s.batches.len() && s.te_idx < s.tile_entities.len() {
+        let end = std::cmp::min(s.block_idx + blocks_per_tick, s.blocks.len());
+        for i in s.block_idx..end {
+            let (pos, state_id) = s.blocks[i];
+
+            if s.record_undo {
+                let old_id = world.get_block_state_id(pos);
+                s.old_snapshots.push(BlockSnapshot {
+                    pos,
+                    state_id: old_id,
+                });
+                s.new_snapshots.push(BlockSnapshot { pos, state_id });
+            }
+
+            world.set_block_state(pos, state_id, flags);
+
+            if first_tick && i == s.block_idx {
+                let readback = world.get_block_state_id(pos);
+                pumpkin_plugin_api::logging::log(
+                    pumpkin_plugin_api::logging::LogLevel::Info,
+                    &format!(
+                        "[paste] first block ({},{},{}) set to {} readback={}",
+                        pos.x, pos.y, pos.z, state_id, readback
+                    ),
+                );
+            }
+        }
+        s.block_idx = end;
+
+        if s.block_idx >= s.blocks.len() && s.te_idx < s.tile_entities.len() {
             let te_remaining = s.tile_entities.len() - s.te_idx;
             let te_batch = std::cmp::min(te_remaining, blocks_per_tick);
             for i in s.te_idx..s.te_idx + te_batch {
@@ -211,8 +153,8 @@ pub(crate) fn schedule_block_op(
             return;
         }
 
-        if s.batch_idx >= s.batches.len() && s.te_idx >= s.tile_entities.len() {
-            s.batches = Vec::new();
+        if s.block_idx >= s.blocks.len() && s.te_idx >= s.tile_entities.len() {
+            s.blocks = Vec::new();
             s.tile_entities = Vec::new();
 
             if s.record_undo && !s.old_snapshots.is_empty() {
