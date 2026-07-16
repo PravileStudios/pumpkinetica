@@ -25,6 +25,9 @@ struct PasteState {
     record_undo: bool,
     old_snapshots: Vec<BlockSnapshot>,
     new_snapshots: Vec<BlockSnapshot>,
+    /// Set once the op completes so a re-fired tick (cancel_task is not
+    /// instantaneous) cannot re-run completion and underflow ACTIVE_PASTES.
+    finished: bool,
 }
 
 pub(crate) fn schedule_paste(
@@ -79,6 +82,7 @@ pub(crate) fn schedule_block_op(
         } else {
             Vec::new()
         },
+        finished: false,
     }));
     let state_clone = state.clone();
     let task_id = std::sync::Arc::new(Mutex::new(0u32));
@@ -88,17 +92,28 @@ pub(crate) fn schedule_block_op(
     let player_name_owned = Some(player_name.clone());
 
     let id = pumpkin_plugin_api::scheduler::schedule_repeating_task(0, 1, move |server| {
+        let mut s = state_clone.lock().unwrap();
+
+        // cancel_task is not instantaneous; a tick may still fire after we
+        // finished. Bail without touching ACTIVE_PASTES to avoid underflow.
+        if s.finished {
+            drop(s);
+            let tid = *task_id_clone.lock().unwrap();
+            pumpkin_plugin_api::scheduler::cancel_task(tid);
+            return;
+        }
+
         let world = match server.get_world_by_name(&dimension) {
             Some(w) => w,
             None => {
+                s.finished = true;
+                drop(s);
                 ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
                 let tid = *task_id_clone.lock().unwrap();
                 pumpkin_plugin_api::scheduler::cancel_task(tid);
                 return;
             }
         };
-
-        let mut s = state_clone.lock().unwrap();
 
         let flags = world::BlockFlags::NOTIFY_LISTENERS
             | world::BlockFlags::FORCE_STATE
@@ -154,6 +169,7 @@ pub(crate) fn schedule_block_op(
         }
 
         if s.block_idx >= s.blocks.len() && s.te_idx >= s.tile_entities.len() {
+            s.finished = true;
             s.blocks = Vec::new();
             s.tile_entities = Vec::new();
 
