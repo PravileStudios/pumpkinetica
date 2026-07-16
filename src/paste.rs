@@ -128,7 +128,6 @@ pub(crate) fn schedule_block_op(
 
         let mut s = state_clone.lock().unwrap();
         let mut remaining = blocks_per_tick;
-        let mut tick_changes: Vec<(BlockPos, u16)> = Vec::new();
 
         while remaining > 0 && s.batch_idx < s.batches.len() {
             let bi = s.batch_idx;
@@ -161,7 +160,10 @@ pub(crate) fn schedule_block_op(
                         }
 
                         chunk.set_block_state(local, state_id);
-                        tick_changes.push((pos, state_id));
+                    }
+
+                    if offset + to_place >= batch_len {
+                        chunk.resend_to_players();
                     }
                 }
                 None => {
@@ -194,10 +196,6 @@ pub(crate) fn schedule_block_op(
             } else {
                 s.block_offset += to_place;
             }
-        }
-
-        if !tick_changes.is_empty() {
-            world.sync_block_changes(&tick_changes);
         }
 
         if s.batch_idx >= s.batches.len() {
