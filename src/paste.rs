@@ -29,6 +29,7 @@ struct PasteState {
     batch_idx: usize,
     block_offset: usize,
     tile_entities: Vec<TileEntityPlacement>,
+    te_idx: usize,
     record_undo: bool,
     old_snapshots: Vec<BlockSnapshot>,
     new_snapshots: Vec<BlockSnapshot>,
@@ -96,6 +97,7 @@ pub(crate) fn schedule_block_op(
         batch_idx: 0,
         block_offset: 0,
         tile_entities,
+        te_idx: 0,
         record_undo,
         old_snapshots: if record_undo {
             Vec::with_capacity(total_blocks)
@@ -198,12 +200,20 @@ pub(crate) fn schedule_block_op(
             }
         }
 
-        if s.batch_idx >= s.batches.len() {
-            for te in s.tile_entities.drain(..) {
+        if s.batch_idx >= s.batches.len() && s.te_idx < s.tile_entities.len() {
+            let te_remaining = s.tile_entities.len() - s.te_idx;
+            let te_batch = std::cmp::min(te_remaining, blocks_per_tick);
+            for i in s.te_idx..s.te_idx + te_batch {
+                let te = &s.tile_entities[i];
                 let _ = world.set_block_entity_nbt(te.pos, &te.nbt);
             }
+            s.te_idx += te_batch;
+            return;
+        }
 
+        if s.batch_idx >= s.batches.len() && s.te_idx >= s.tile_entities.len() {
             s.batches = Vec::new();
+            s.tile_entities = Vec::new();
 
             if s.record_undo && !s.old_snapshots.is_empty() {
                 let config = get_config();
