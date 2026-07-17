@@ -45,7 +45,6 @@ pub struct Schematic {
 
 #[derive(Debug)]
 pub struct Region {
-    pub name: String,
     pub position: [i32; 3],
     pub size: [i32; 3],
     pub palette: Vec<PaletteEntry>,
@@ -139,7 +138,7 @@ pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
     let regions_compound = get_compound(&root, "Regions").ok_or("Missing 'Regions' tag")?;
 
     let mut regions = Vec::new();
-    for (region_name, region_val) in regions_compound {
+    for region_val in regions_compound.values() {
         let region = match region_val {
             NbtValue::Compound(r) => r,
             _ => continue,
@@ -156,7 +155,6 @@ pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
         let block_indices = unpack_litematica(&packed, palette.len(), total);
 
         regions.push(Region {
-            name: region_name.clone(),
             position,
             size,
             palette,
@@ -585,7 +583,6 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
     Ok(Schematic {
         name,
         regions: vec![Region {
-            name: "main".into(),
             position: [0, 0, 0],
             size: [width, height, length],
             palette,

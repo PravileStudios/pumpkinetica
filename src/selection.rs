@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::{
-    LOADED_SCHEMATICS, PLAYER_CLIPBOARDS, PLAYER_HISTORIES, PLAYER_SELECTIONS, get_config,
-    msg_info, normalize_item_name,
+    PLAYER_CLIPBOARDS, PLAYER_HISTORIES, PLAYER_SELECTIONS, get_config, msg_info,
+    normalize_item_name,
 };
 
 static WAND_DEBOUNCE: Mutex<Option<HashMap<String, BlockPos>>> = Mutex::new(None);
@@ -167,9 +167,6 @@ impl EventHandler<PlayerLeaveEvent> for PlayerCleanupHandler {
             map.remove(&name);
         }
         if let Some(ref mut map) = *PLAYER_HISTORIES.lock().unwrap() {
-            map.remove(&name);
-        }
-        if let Some(ref mut map) = *LOADED_SCHEMATICS.lock().unwrap() {
             map.remove(&name);
         }
         if let Some(ref mut map) = *WAND_DEBOUNCE.lock().unwrap() {

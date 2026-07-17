@@ -43,8 +43,6 @@ struct PSchematics;
 register_plugin!(PSchematics);
 
 pub(crate) static CONFIG: Mutex<Option<PluginConfig>> = Mutex::new(None);
-pub(crate) static LOADED_SCHEMATICS: Mutex<Option<HashMap<String, LoadedSchematic>>> =
-    Mutex::new(None);
 pub(crate) static ACTIVE_PASTES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PLAYER_SELECTIONS: Mutex<Option<HashMap<String, Selection>>> = Mutex::new(None);
 pub(crate) static PLAYER_CLIPBOARDS: Mutex<Option<HashMap<String, Clipboard>>> = Mutex::new(None);
@@ -78,7 +76,6 @@ impl Plugin for PSchematics {
         let config = load_config(&data_folder);
         *CONFIG.lock().unwrap() = Some(config);
 
-        *LOADED_SCHEMATICS.lock().unwrap() = Some(HashMap::new());
         *PLAYER_SELECTIONS.lock().unwrap() = Some(HashMap::new());
         *PLAYER_CLIPBOARDS.lock().unwrap() = Some(HashMap::new());
         *PLAYER_HISTORIES.lock().unwrap() = Some(HashMap::new());
@@ -311,11 +308,6 @@ pub(crate) fn normalize_item_name(name: &str) -> &str {
 }
 
 // ── Block Resolution ────────────────────────────────────────────────
-
-pub(crate) struct LoadedSchematic {
-    pub schematic: parser::Schematic,
-    pub palette_map: Vec<Vec<Option<u16>>>,
-}
 
 pub(crate) fn register_reverse(state_id: u16, entry: &PaletteEntry) {
     if let Some(ref mut reg) = *REVERSE_REGISTRY.lock().unwrap() {

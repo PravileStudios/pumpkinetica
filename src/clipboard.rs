@@ -3,16 +3,112 @@ use std::collections::HashMap;
 use pumpkin_plugin_api::common::BlockPos;
 use pumpkin_plugin_api::world::World;
 
+use crate::parser::{Region, Schematic};
 use crate::paste::{BlockPlacement, TileEntityPlacement};
 use crate::{REVERSE_REGISTRY, resolve_and_register};
 
+const MAX_CLIPBOARD_BLOCKS: i64 = 64 * 1024 * 1024;
+
 pub(crate) struct Clipboard {
+    pub name: String,
     pub blocks: Vec<u16>,
     pub tile_entities: Vec<(BlockPos, Vec<u8>)>,
     pub size_x: i32,
     pub size_y: i32,
     pub size_z: i32,
     pub offset: BlockPos,
+}
+
+fn region_min(r: &Region) -> [i32; 3] {
+    let n = |p: i32, s: i32| if s < 0 { p + s + 1 } else { p };
+    [
+        n(r.position[0], r.size[0]),
+        n(r.position[1], r.size[1]),
+        n(r.position[2], r.size[2]),
+    ]
+}
+
+pub(crate) fn schematic_to_clipboard(
+    name: String,
+    schematic: &Schematic,
+    palette_map: &[Vec<Option<u16>>],
+) -> Result<Clipboard, String> {
+    if schematic.regions.is_empty() {
+        return Err("Schematic has no regions".into());
+    }
+
+    let mut gmin = [i32::MAX; 3];
+    let mut gmax = [i32::MIN; 3];
+    for r in &schematic.regions {
+        let m = region_min(r);
+        let [ax, ay, az] = r.abs_size();
+        for i in 0..3 {
+            gmin[i] = gmin[i].min(m[i]);
+        }
+        gmax[0] = gmax[0].max(m[0] + ax - 1);
+        gmax[1] = gmax[1].max(m[1] + ay - 1);
+        gmax[2] = gmax[2].max(m[2] + az - 1);
+    }
+
+    let (sx, sy, sz) = (
+        gmax[0] - gmin[0] + 1,
+        gmax[1] - gmin[1] + 1,
+        gmax[2] - gmin[2] + 1,
+    );
+    let vol = sx as i64 * sy as i64 * sz as i64;
+    if vol <= 0 || vol > MAX_CLIPBOARD_BLOCKS {
+        return Err(format!("Schematic bounding box too large ({vol} blocks)"));
+    }
+
+    let mut blocks = vec![0u16; vol as usize];
+    let mut tile_entities = Vec::new();
+
+    for (ri, r) in schematic.regions.iter().enumerate() {
+        let m = region_min(r);
+        let base = [m[0] - gmin[0], m[1] - gmin[1], m[2] - gmin[2]];
+        let [ax, ay, az] = r.abs_size();
+        let pm = &palette_map[ri];
+
+        for y in 0..ay {
+            for z in 0..az {
+                for x in 0..ax {
+                    let pidx = r.get_palette_index(x, y, z) as usize;
+                    let state = pm.get(pidx).copied().flatten().unwrap_or(0);
+                    if state == 0 {
+                        continue;
+                    }
+                    let (gx, gy, gz) = (base[0] + x, base[1] + y, base[2] + z);
+                    let idx = (gy * sx * sz + gz * sx + gx) as usize;
+                    blocks[idx] = state;
+                }
+            }
+        }
+
+        for te in &r.tile_entities {
+            tile_entities.push((
+                BlockPos {
+                    x: base[0] + te.x,
+                    y: base[1] + te.y,
+                    z: base[2] + te.z,
+                },
+                te.raw_nbt.clone(),
+            ));
+        }
+    }
+
+    Ok(Clipboard {
+        name,
+        blocks,
+        tile_entities,
+        size_x: sx,
+        size_y: sy,
+        size_z: sz,
+        offset: BlockPos {
+            x: -gmin[0],
+            y: -gmin[1],
+            z: -gmin[2],
+        },
+    })
 }
 
 impl Clipboard {

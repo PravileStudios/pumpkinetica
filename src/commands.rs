@@ -12,16 +12,16 @@ use pumpkin_plugin_api::{
 
 use crate::clipboard::{
     Clipboard, FlipAxis, clipboard_to_schem_data, flip_clipboard, read_selection_chunk_batched,
-    rotate_clipboard,
+    rotate_clipboard, schematic_to_clipboard,
 };
 use crate::history::PlayerHistory;
 use crate::parser;
-use crate::paste::{BlockPlacement, TileEntityPlacement, schedule_block_op, schedule_paste};
+use crate::paste::{BlockPlacement, schedule_block_op, schedule_paste};
 use crate::selection::Selection;
 use crate::{
-    ACTIVE_PASTES, LOADED_SCHEMATICS, PLAYER_CLIPBOARDS, PLAYER_HISTORIES, PLAYER_SELECTIONS,
-    PLUGIN_VERSION, REVERSE_REGISTRY, LoadedSchematic, get_config, msg_error, msg_info,
-    msg_success, msg_warn, resolve_and_register, resolve_fallback_block, resolve_palette,
+    ACTIVE_PASTES, PLAYER_CLIPBOARDS, PLAYER_HISTORIES, PLAYER_SELECTIONS, PLUGIN_VERSION,
+    REVERSE_REGISTRY, get_config, msg_error, msg_info, msg_success, msg_warn, resolve_and_register,
+    resolve_fallback_block, resolve_palette,
 };
 
 fn is_safe_filename(name: &str) -> bool {
@@ -88,31 +88,6 @@ impl CommandHandler for LoadHandler {
             .map(|r| resolve_palette(&r.palette, fallback))
             .collect();
 
-        let total_blocks: usize = schematic
-            .regions
-            .iter()
-            .enumerate()
-            .map(|(i, r)| {
-                let [sx, sy, sz] = r.abs_size();
-                let pm = &palette_map[i];
-                let mut count = 0usize;
-                for y in 0..sy {
-                    for z in 0..sz {
-                        for x in 0..sx {
-                            let idx = r.get_palette_index(x, y, z) as usize;
-                            if idx < pm.len()
-                                && let Some(state_id) = pm[idx]
-                                && state_id != 0
-                            {
-                                count += 1;
-                            }
-                        }
-                    }
-                }
-                count
-            })
-            .sum();
-
         let mut unresolved_count = 0usize;
         for (i, pm) in palette_map.iter().enumerate() {
             for (j, entry) in pm.iter().enumerate() {
@@ -125,21 +100,17 @@ impl CommandHandler for LoadHandler {
         let region_count = schematic.regions.len();
         let name = schematic.name.clone();
 
-        if let Some(ref mut m) = *PLAYER_CLIPBOARDS.lock().unwrap() {
-            m.remove(&player_name);
-        }
-
-        {
-            let mut map = LOADED_SCHEMATICS.lock().unwrap();
-            if let Some(ref mut m) = *map {
-                m.insert(
-                    player_name,
-                    LoadedSchematic {
-                        schematic,
-                        palette_map,
-                    },
-                );
+        let clip = match schematic_to_clipboard(name.clone(), &schematic, &palette_map) {
+            Ok(c) => c,
+            Err(e) => {
+                sender.send_message(msg_error(&format!("Cannot load: {e}")));
+                return Ok(1);
             }
+        };
+        let total_blocks = clip.blocks.iter().filter(|&&b| b != 0).count();
+
+        if let Some(ref mut m) = *PLAYER_CLIPBOARDS.lock().unwrap() {
+            m.insert(player_name, clip);
         }
 
         sender.send_message(msg_success(&format!(
@@ -191,124 +162,24 @@ impl CommandHandler for PasteHandler {
             return Ok(1);
         }
 
-        // Try clipboard first, then loaded schematic
-        {
-            let clips = PLAYER_CLIPBOARDS.lock().unwrap();
-            if let Some(ref map) = *clips
-                && let Some(clip) = map.get(&player_name)
-            {
-                let (work_queue, tile_entities) = clip.to_work_queue(origin, self.at_feet);
-                let total = work_queue.len();
-                let dimension = player_world.get_dimension();
-
-                sender.send_message(msg_info(&format!("Pasting clipboard ({total} blocks)...")));
-
-                schedule_paste(
-                    work_queue,
-                    tile_entities,
-                    dimension,
-                    config.blocks_per_tick,
-                    player_name,
-                    "clipboard".into(),
-                    origin,
-                );
-                return Ok(0);
-            }
-        }
-
-        let map = LOADED_SCHEMATICS.lock().unwrap();
-        let loaded = map
+        let clips = PLAYER_CLIPBOARDS.lock().unwrap();
+        let clip = clips
             .as_ref()
             .and_then(|m| m.get(&player_name))
             .ok_or_else(|| {
                 CommandError::CommandFailed(msg_error(
-                    "No clipboard or schematic loaded. Use /schematic copy or /schematic load <file>",
+                    "Nothing to paste. Use /schematic copy or /schematic load <file>",
                 ))
             })?;
 
-        let mut work_queue: Vec<BlockPlacement> = Vec::new();
-        let mut tile_entities: Vec<TileEntityPlacement> = Vec::new();
-
-        let region_min = |region: &crate::parser::Region| {
-            let n = |pos: i32, size: i32| if size < 0 { pos + size + 1 } else { pos };
-            [
-                n(region.position[0], region.size[0]),
-                n(region.position[1], region.size[1]),
-                n(region.position[2], region.size[2]),
-            ]
-        };
-
-        let shift = if self.at_feet {
-            loaded.schematic.regions.iter().fold(
-                [i32::MAX, i32::MAX, i32::MAX],
-                |acc, region| {
-                    let m = region_min(region);
-                    [acc[0].min(m[0]), acc[1].min(m[1]), acc[2].min(m[2])]
-                },
-            )
-        } else {
-            [0, 0, 0]
-        };
-
-        for (region_idx, region) in loaded.schematic.regions.iter().enumerate() {
-            let [sx, sy, sz] = region.abs_size();
-            let palette_map = &loaded.palette_map[region_idx];
-
-            let m = region_min(region);
-            let offset_x = m[0] - shift[0];
-            let offset_y = m[1] - shift[1];
-            let offset_z = m[2] - shift[2];
-
-            for y in 0..sy {
-                for z in 0..sz {
-                    for x in 0..sx {
-                        let palette_idx = region.get_palette_index(x, y, z) as usize;
-
-                        if palette_idx >= palette_map.len() {
-                            continue;
-                        }
-
-                        let Some(state_id) = palette_map[palette_idx] else {
-                            continue;
-                        };
-
-                        if state_id == 0 {
-                            continue;
-                        }
-
-                        work_queue.push(BlockPlacement {
-                            pos: BlockPos {
-                                x: origin.x + offset_x + x,
-                                y: origin.y + offset_y + y,
-                                z: origin.z + offset_z + z,
-                            },
-                            state_id,
-                        });
-                    }
-                }
-            }
-
-            for te in &region.tile_entities {
-                tile_entities.push(TileEntityPlacement {
-                    pos: BlockPos {
-                        x: origin.x + offset_x + te.x,
-                        y: origin.y + offset_y + te.y,
-                        z: origin.z + offset_z + te.z,
-                    },
-                    nbt: te.raw_nbt.clone(),
-                });
-            }
-        }
-
+        let (work_queue, tile_entities) = clip.to_work_queue(origin, self.at_feet);
         let total = work_queue.len();
-        let schematic_name = loaded.schematic.name.clone();
-        drop(map);
+        let name = clip.name.clone();
+        drop(clips);
 
         let dimension = player_world.get_dimension();
 
-        sender.send_message(msg_info(&format!(
-            "Pasting '{schematic_name}' ({total} blocks)..."
-        )));
+        sender.send_message(msg_info(&format!("Pasting '{name}' ({total} blocks)...")));
 
         schedule_paste(
             work_queue,
@@ -316,7 +187,7 @@ impl CommandHandler for PasteHandler {
             dimension,
             config.blocks_per_tick,
             player_name,
-            schematic_name,
+            name,
             origin,
         );
 
@@ -387,47 +258,25 @@ impl CommandHandler for InfoHandler {
         let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
         let player_name = player.get_name();
 
-        let map = LOADED_SCHEMATICS.lock().unwrap();
-        let loaded = map
+        let clips = PLAYER_CLIPBOARDS.lock().unwrap();
+        let clip = clips
             .as_ref()
             .and_then(|m| m.get(&player_name))
-            .ok_or_else(|| CommandError::CommandFailed(msg_error("No schematic loaded.")))?;
+            .ok_or_else(|| CommandError::CommandFailed(msg_error("Nothing loaded or copied.")))?;
 
-        let schematic = &loaded.schematic;
+        let non_air = clip.blocks.iter().filter(|&&b| b != 0).count();
 
-        let header = msg_info(&format!("Schematic: {}", schematic.name));
-        sender.send_message(header);
-
-        for (i, region) in schematic.regions.iter().enumerate() {
-            let [sx, sy, sz] = region.abs_size();
-            let region_msg = TextComponent::text(&format!(
-                "  {} - {}x{}x{}, {} blocks, {} tile entities",
-                region.name,
-                sx,
-                sy,
-                sz,
-                region.palette.len(),
-                region.tile_entities.len(),
-            ));
-            region_msg.color_named(NamedColor::Gray);
-            sender.send_message(region_msg);
-
-            let unresolved: Vec<&str> = loaded.palette_map[i]
-                .iter()
-                .zip(region.palette.iter())
-                .filter(|(state, entry)| {
-                    state.is_none() && entry.name != "minecraft:air" && entry.name != "air"
-                })
-                .map(|(_, entry)| entry.name.as_str())
-                .collect();
-
-            if !unresolved.is_empty() {
-                let warn =
-                    TextComponent::text(&format!("    Unsupported: {}", unresolved.join(", ")));
-                warn.color_named(NamedColor::Yellow);
-                sender.send_message(warn);
-            }
-        }
+        sender.send_message(msg_info(&format!("Schematic: {}", clip.name)));
+        let detail = TextComponent::text(&format!(
+            "  {}x{}x{}, {} blocks, {} tile entities",
+            clip.size_x,
+            clip.size_y,
+            clip.size_z,
+            non_air,
+            clip.tile_entities.len(),
+        ));
+        detail.color_named(NamedColor::Gray);
+        sender.send_message(detail);
 
         Ok(0)
     }
@@ -681,6 +530,7 @@ impl CommandHandler for CopyHandler {
         let non_air = blocks.iter().filter(|&&b| b != 0).count();
 
         let clip = Clipboard {
+            name: "clipboard".into(),
             blocks,
             tile_entities,
             size_x: sx,
@@ -692,10 +542,6 @@ impl CommandHandler for CopyHandler {
                 z: player_block.z - min.z,
             },
         };
-
-        if let Some(ref mut m) = *LOADED_SCHEMATICS.lock().unwrap() {
-            m.remove(&player_name);
-        }
 
         {
             let mut clips = PLAYER_CLIPBOARDS.lock().unwrap();
