@@ -65,6 +65,9 @@ pub(crate) fn schedule_block_op(
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
     let total_blocks: usize = queue.len();
+    // Skip undo snapshots for oversized ops so history memory stays bounded
+    // (peak ≈ max_undo_volume × max_undo_history per player).
+    let record_undo = record_undo && (total_blocks as u64) <= get_config().max_undo_volume;
     let blocks: Vec<(BlockPos, u16)> = queue.into_iter().map(|p| (p.pos, p.state_id)).collect();
     let state = std::sync::Arc::new(Mutex::new(PasteState {
         blocks,

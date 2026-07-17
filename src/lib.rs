@@ -216,6 +216,10 @@ pub(crate) struct PluginConfig {
     pub max_undo_history: usize,
     #[serde(default = "default_max_selection_volume")]
     pub max_selection_volume: u64,
+    /// Largest op (in blocks) that still records undo/redo snapshots. Bigger
+    /// ops run without undo to bound memory (peak ≈ this × max_undo_history).
+    #[serde(default = "default_max_undo_volume")]
+    pub max_undo_volume: u64,
 }
 
 fn default_fallback_block() -> String {
@@ -236,6 +240,9 @@ fn default_max_undo_history() -> usize {
 fn default_max_selection_volume() -> u64 {
     10_000_000
 }
+fn default_max_undo_volume() -> u64 {
+    1_000_000
+}
 
 impl Default for PluginConfig {
     fn default() -> Self {
@@ -246,6 +253,7 @@ impl Default for PluginConfig {
             wand_item: default_wand_item(),
             max_undo_history: default_max_undo_history(),
             max_selection_volume: default_max_selection_volume(),
+            max_undo_volume: default_max_undo_volume(),
         }
     }
 }

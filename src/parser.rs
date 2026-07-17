@@ -17,7 +17,8 @@ pub struct Region {
     pub position: [i32; 3],
     pub size: [i32; 3],
     pub palette: Vec<PaletteEntry>,
-    pub block_data: Vec<i64>,
+    /// One palette index per block, in YZX order (unpacked at parse time).
+    pub block_indices: Vec<u16>,
     pub tile_entities: Vec<TileEntity>,
 }
 
@@ -40,44 +41,49 @@ impl Region {
         [self.size[0].abs(), self.size[1].abs(), self.size[2].abs()]
     }
 
-    pub fn bits_per_entry(&self) -> u32 {
-        let palette_size = self.palette.len() as u32;
-        std::cmp::max(2, 32 - palette_size.saturating_sub(1).leading_zeros())
-    }
-
     pub fn get_block_index(&self, x: i32, y: i32, z: i32) -> usize {
         let [sx, _, sz] = self.abs_size();
         (y * sx * sz + z * sx + x) as usize
     }
 
     pub fn get_palette_index(&self, x: i32, y: i32, z: i32) -> u16 {
-        let block_index = self.get_block_index(x, y, z);
-        let bits = self.bits_per_entry();
-        let mask = (1u64 << bits) - 1;
-
-        let start_offset = (block_index as u64) * (bits as u64);
-        let start_arr_index = (start_offset >> 6) as usize;
-        let start_bit_offset = (start_offset & 0x3F) as u32;
-
-        if start_arr_index >= self.block_data.len() {
-            return 0;
-        }
-
-        let end_arr_index = (((block_index as u64 + 1) * (bits as u64)) - 1) >> 6;
-
-        if start_arr_index == end_arr_index as usize {
-            ((self.block_data[start_arr_index] as u64 >> start_bit_offset) & mask) as u16
-        } else {
-            let end_idx = end_arr_index as usize;
-            if end_idx >= self.block_data.len() {
-                return 0;
-            }
-            let end_offset = 64 - start_bit_offset;
-            (((self.block_data[start_arr_index] as u64 >> start_bit_offset)
-                | (self.block_data[end_idx] as u64) << end_offset)
-                & mask) as u16
-        }
+        self.block_indices
+            .get(self.get_block_index(x, y, z))
+            .copied()
+            .unwrap_or(0)
     }
+}
+
+/// Unpacks the litematica bit-packed `BlockStates` long array into one palette
+/// index per block. Entries span long boundaries (pre-1.16 packing).
+fn unpack_litematica(packed: &[i64], palette_len: usize, total: usize) -> Vec<u16> {
+    let bits = std::cmp::max(2, 32 - (palette_len as u32).saturating_sub(1).leading_zeros());
+    let mask = (1u64 << bits) - 1;
+
+    let mut out = Vec::with_capacity(total);
+    for i in 0..total {
+        let start_offset = (i as u64) * (bits as u64);
+        let start_arr = (start_offset >> 6) as usize;
+        if start_arr >= packed.len() {
+            out.push(0);
+            continue;
+        }
+        let start_bit = (start_offset & 0x3F) as u32;
+        let end_arr = ((((i as u64) + 1) * (bits as u64)) - 1) >> 6;
+
+        let value = if start_arr == end_arr as usize {
+            (packed[start_arr] as u64 >> start_bit) & mask
+        } else if (end_arr as usize) < packed.len() {
+            let end_offset = 64 - start_bit;
+            ((packed[start_arr] as u64 >> start_bit)
+                | (packed[end_arr as usize] as u64) << end_offset)
+                & mask
+        } else {
+            0
+        };
+        out.push(value as u16);
+    }
+    out
 }
 
 pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
@@ -111,15 +117,18 @@ pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
         let size = get_int_triple(region, "Size")?;
 
         let palette = parse_palette(region)?;
-        let block_data = get_long_array(region, "BlockStates")?;
+        let packed = get_long_array(region, "BlockStates")?;
         let tile_entities = parse_tile_entities(region);
+
+        let total = (size[0].abs() * size[1].abs() * size[2].abs()) as usize;
+        let block_indices = unpack_litematica(&packed, palette.len(), total);
 
         regions.push(Region {
             name: region_name.clone(),
             position,
             size,
             palette,
-            block_data,
+            block_indices,
             tile_entities,
         });
     }
@@ -530,12 +539,6 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
     let total_blocks = (width * height * length) as usize;
     let block_indices = decode_varint_array(&block_data_bytes, total_blocks)?;
 
-    let bits = std::cmp::max(
-        2,
-        32 - (palette.len() as u32).saturating_sub(1).leading_zeros(),
-    );
-    let block_data = pack_indices_to_longs(&block_indices, bits);
-
     let tile_entities = if let Some(NbtValue::Compound(blocks)) = schem_data.get("Blocks") {
         parse_schem_block_entities(blocks)
     } else {
@@ -551,7 +554,7 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
             position: [0, 0, 0],
             size: [width, height, length],
             palette,
-            block_data,
+            block_indices,
             tile_entities,
         }],
     })
@@ -602,26 +605,6 @@ fn decode_varint_array(bytes: &[i8], expected_len: usize) -> Result<Vec<u16>, St
     }
 
     Ok(result)
-}
-
-fn pack_indices_to_longs(indices: &[u16], bits: u32) -> Vec<i64> {
-    let entries_per_long = 64 / bits;
-    let num_longs = (indices.len() as u64).div_ceil(entries_per_long as u64);
-    let mut longs = vec![0i64; num_longs as usize];
-
-    for (i, &idx) in indices.iter().enumerate() {
-        let start_offset = (i as u64) * (bits as u64);
-        let arr_index = (start_offset >> 6) as usize;
-        let bit_offset = (start_offset & 0x3F) as u32;
-
-        longs[arr_index] |= (idx as i64) << bit_offset;
-
-        if bit_offset + bits > 64 && arr_index + 1 < longs.len() {
-            longs[arr_index + 1] |= (idx as i64) >> (64 - bit_offset);
-        }
-    }
-
-    longs
 }
 
 fn parse_schem_block_entities(schem_data: &HashMap<String, NbtValue>) -> Vec<TileEntity> {
