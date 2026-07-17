@@ -108,7 +108,10 @@ pub(crate) fn read_selection_chunk_batched(
                         let idx = (rel_y * sx * sz + rel_z * sx + rel_x) as usize;
                         blocks[idx] = state_id;
 
-                        if let Some(nbt) = world.get_block_entity_nbt(pos) {
+                        // Air never carries a block entity — skip the host call.
+                        if state_id != 0
+                            && let Some(nbt) = world.get_block_entity_nbt(pos)
+                        {
                             tile_entities.push((BlockPos { x: rel_x, y: rel_y, z: rel_z }, nbt));
                         }
                     }
@@ -161,19 +164,22 @@ pub(crate) fn rotate_clipboard(clip: &mut Clipboard, degrees: i32) {
         te.0.z = nz;
     }
 
+    // Re-anchor the offset the same way block indices are re-anchored above
+    // (the `sz - 1 - z` / `sx - 1 - x` terms). A pure vector rotation would
+    // shift the paste anchor by up to size-1 blocks.
     let (ox, oz) = (clip.offset.x, clip.offset.z);
     match degrees {
         90 => {
-            clip.offset.x = -oz;
+            clip.offset.x = sz - 1 - oz;
             clip.offset.z = ox;
         }
         180 => {
-            clip.offset.x = -ox;
-            clip.offset.z = -oz;
+            clip.offset.x = sx - 1 - ox;
+            clip.offset.z = sz - 1 - oz;
         }
         270 => {
             clip.offset.x = oz;
-            clip.offset.z = -ox;
+            clip.offset.z = sx - 1 - ox;
         }
         _ => {}
     }
@@ -212,9 +218,10 @@ pub(crate) fn flip_clipboard(clip: &mut Clipboard, axis: FlipAxis) {
         }
     }
 
+    // Re-anchor the offset to match the mirrored block indices (`sx - 1 - x`).
     match axis {
-        FlipAxis::X => clip.offset.x = -(clip.offset.x),
-        FlipAxis::Z => clip.offset.z = -(clip.offset.z),
+        FlipAxis::X => clip.offset.x = sx - 1 - clip.offset.x,
+        FlipAxis::Z => clip.offset.z = sz - 1 - clip.offset.z,
     }
 }
 

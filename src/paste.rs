@@ -121,14 +121,6 @@ pub(crate) fn schedule_block_op(
             | world::BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
             | world::BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
 
-        let first_tick = s.block_idx == 0;
-        if first_tick {
-            pumpkin_plugin_api::logging::log(
-                pumpkin_plugin_api::logging::LogLevel::Info,
-                &format!("[paste] task start: {} blocks queued", s.blocks.len()),
-            );
-        }
-
         let end = std::cmp::min(s.block_idx + blocks_per_tick, s.blocks.len());
         for i in s.block_idx..end {
             let (pos, state_id) = s.blocks[i];
@@ -143,17 +135,6 @@ pub(crate) fn schedule_block_op(
             }
 
             world.set_block_state(pos, state_id, flags);
-
-            if first_tick && i == s.block_idx {
-                let readback = world.get_block_state_id(pos);
-                pumpkin_plugin_api::logging::log(
-                    pumpkin_plugin_api::logging::LogLevel::Info,
-                    &format!(
-                        "[paste] first block ({},{},{}) set to {} readback={}",
-                        pos.x, pos.y, pos.z, state_id, readback
-                    ),
-                );
-            }
         }
         s.block_idx = end;
 
