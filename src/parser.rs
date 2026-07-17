@@ -5,19 +5,12 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 
-/// Hard ceiling on block count for any single schematic/region. Guards against
-/// crafted files whose dimensions would OOM (and trap) the WASM instance.
 const MAX_SCHEM_BLOCKS: i64 = 64 * 1024 * 1024;
 
-/// Bytes still unread in the cursor.
 fn remaining(cursor: &Cursor<&[u8]>) -> usize {
     (cursor.get_ref().len() as u64).saturating_sub(cursor.position()) as usize
 }
 
-/// Validate a length field read from untrusted NBT: reject negatives and any
-/// count larger than the bytes left. Every NBT element is >= 1 byte, so the
-/// remaining-byte count is a safe upper bound that stops attacker-controlled
-/// huge allocations before they happen (the element reads error on truncation).
 fn checked_len(raw: i32, cursor: &Cursor<&[u8]>) -> Result<usize, String> {
     if raw < 0 {
         return Err("Negative NBT length".into());
@@ -29,8 +22,6 @@ fn checked_len(raw: i32, cursor: &Cursor<&[u8]>) -> Result<usize, String> {
     Ok(len)
 }
 
-/// Block count for a region/schematic, guarded against i32 multiply overflow
-/// and absurd sizes from crafted files.
 fn checked_volume(dims: [i32; 3]) -> Result<usize, String> {
     let mut vol: i64 = 1;
     for d in dims {
@@ -556,7 +547,6 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
     let mut palette_entries: Vec<(i32, PaletteEntry)> = Vec::with_capacity(palette_compound.len());
     for (block_str, idx_val) in palette_compound {
         let idx = match idx_val {
-            // Negative indices would sign-extend to a huge `usize` on wasm32.
             NbtValue::Int(i) if *i >= 0 => *i,
             _ => continue,
         };
@@ -567,8 +557,6 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
 
     palette_entries.sort_by_key(|(idx, _)| *idx);
     let max_idx = palette_entries.last().map(|(i, _)| *i).unwrap_or(0) as usize;
-    // Block data indices are u16; a palette larger than that is malformed and
-    // would only serve to force a giant allocation.
     if max_idx >= 1 << 16 {
         return Err(format!("Palette too large ({} entries)", max_idx + 1));
     }

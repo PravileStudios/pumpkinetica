@@ -20,10 +20,6 @@ impl Clipboard {
         (y * self.size_x * self.size_z + z * self.size_x + x) as usize
     }
 
-    /// Build the paste work queue. When `at_feet` is true the copy offset is
-    /// ignored so the clipboard's minimum corner lands on `origin` (the
-    /// player's feet); otherwise the structure keeps its copy-time position
-    /// relative to the player.
     pub fn to_work_queue(
         &self,
         origin: BlockPos,

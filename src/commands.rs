@@ -24,8 +24,6 @@ use crate::{
     msg_success, msg_warn, resolve_and_register, resolve_fallback_block, resolve_palette,
 };
 
-/// Reject anything but a bare file name so a crafted argument cannot escape
-/// the schematics directory (path traversal on read or write).
 fn is_safe_filename(name: &str) -> bool {
     !name.is_empty()
         && !name.contains('/')
@@ -162,8 +160,6 @@ impl CommandHandler for LoadHandler {
 // ── Paste ───────────────────────────────────────────────────────────
 
 pub(crate) struct PasteHandler {
-    /// When true, ignore the clipboard/schematic offset and anchor the
-    /// structure's minimum corner at the player's feet. `/schematic paste here`.
     pub(crate) at_feet: bool,
 }
 
@@ -229,8 +225,6 @@ impl CommandHandler for PasteHandler {
         let mut work_queue: Vec<BlockPlacement> = Vec::new();
         let mut tile_entities: Vec<TileEntityPlacement> = Vec::new();
 
-        // Normalized min corner of a region in paste space (folds in the
-        // negative-size flip so mirrored regions anchor at their true min).
         let region_min = |region: &crate::parser::Region| {
             let n = |pos: i32, size: i32| if size < 0 { pos + size + 1 } else { pos };
             [
@@ -240,8 +234,6 @@ impl CommandHandler for PasteHandler {
             ]
         };
 
-        // In `at_feet` mode, shift the whole schematic so its global minimum
-        // corner lands on the player — preserving inter-region layout.
         let shift = if self.at_feet {
             loaded.schematic.regions.iter().fold(
                 [i32::MAX, i32::MAX, i32::MAX],
