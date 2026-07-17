@@ -24,6 +24,16 @@ use crate::{
     msg_success, msg_warn, resolve_and_register, resolve_fallback_block, resolve_palette,
 };
 
+/// Reject anything but a bare file name so a crafted argument cannot escape
+/// the schematics directory (path traversal on read or write).
+fn is_safe_filename(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && !name.contains('\0')
+}
+
 // ── Load ────────────────────────────────────────────────────────────
 
 pub(crate) struct LoadHandler {
@@ -48,6 +58,11 @@ impl CommandHandler for LoadHandler {
                 )));
             }
         };
+
+        if !is_safe_filename(&file_arg) {
+            sender.send_message(msg_error("Invalid file name."));
+            return Ok(1);
+        }
 
         let path = format!("{}/{}", self.schematics_dir, file_arg);
         let data = match std::fs::read(&path) {
@@ -721,6 +736,11 @@ impl CommandHandler for SaveHandler {
             }
         };
 
+        if !is_safe_filename(&name) {
+            sender.send_message(msg_error("Invalid schematic name."));
+            return Ok(1);
+        }
+
         let clips = PLAYER_CLIPBOARDS.lock().unwrap();
         let clip = clips
             .as_ref()
@@ -748,7 +768,13 @@ impl CommandHandler for SaveHandler {
         drop(reg);
         drop(clips);
 
-        let bytes = parser::write_schem_bytes(&nbt);
+        let bytes = match parser::write_schem_bytes(&nbt) {
+            Ok(b) => b,
+            Err(e) => {
+                sender.send_message(msg_error(&format!("Failed to encode schematic: {e}")));
+                return Ok(1);
+            }
+        };
 
         let filename = if name.ends_with(".schem") {
             name.to_string()

@@ -5,6 +5,47 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 
+/// Hard ceiling on block count for any single schematic/region. Guards against
+/// crafted files whose dimensions would OOM (and trap) the WASM instance.
+const MAX_SCHEM_BLOCKS: i64 = 64 * 1024 * 1024;
+
+/// Bytes still unread in the cursor.
+fn remaining(cursor: &Cursor<&[u8]>) -> usize {
+    (cursor.get_ref().len() as u64).saturating_sub(cursor.position()) as usize
+}
+
+/// Validate a length field read from untrusted NBT: reject negatives and any
+/// count larger than the bytes left. Every NBT element is >= 1 byte, so the
+/// remaining-byte count is a safe upper bound that stops attacker-controlled
+/// huge allocations before they happen (the element reads error on truncation).
+fn checked_len(raw: i32, cursor: &Cursor<&[u8]>) -> Result<usize, String> {
+    if raw < 0 {
+        return Err("Negative NBT length".into());
+    }
+    let len = raw as usize;
+    if len > remaining(cursor) {
+        return Err("NBT length exceeds remaining data".into());
+    }
+    Ok(len)
+}
+
+/// Block count for a region/schematic, guarded against i32 multiply overflow
+/// and absurd sizes from crafted files.
+fn checked_volume(dims: [i32; 3]) -> Result<usize, String> {
+    let mut vol: i64 = 1;
+    for d in dims {
+        vol = vol
+            .checked_mul((d as i64).abs())
+            .ok_or("Dimension overflow")?;
+    }
+    if vol > MAX_SCHEM_BLOCKS {
+        return Err(format!(
+            "Schematic too large ({vol} blocks, max {MAX_SCHEM_BLOCKS})"
+        ));
+    }
+    Ok(vol as usize)
+}
+
 #[derive(Debug)]
 pub struct Schematic {
     pub name: String,
@@ -120,7 +161,7 @@ pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
         let packed = get_long_array(region, "BlockStates")?;
         let tile_entities = parse_tile_entities(region);
 
-        let total = (size[0].abs() * size[1].abs() * size[2].abs()) as usize;
+        let total = checked_volume(size)?;
         let block_indices = unpack_litematica(&packed, palette.len(), total);
 
         regions.push(Region {
@@ -242,7 +283,7 @@ fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8) -> Result<NbtValue, String
         5 => Ok(NbtValue::Float(read_f32(cursor)?)),
         6 => Ok(NbtValue::Double(read_f64(cursor)?)),
         7 => {
-            let len = read_i32(cursor)? as usize;
+            let len = checked_len(read_i32(cursor)?, cursor)?;
             let mut arr = vec![0i8; len];
             for item in &mut arr {
                 *item = read_i8(cursor)?;
@@ -252,7 +293,7 @@ fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8) -> Result<NbtValue, String
         8 => Ok(NbtValue::String(read_string(cursor)?)),
         9 => {
             let list_type = read_u8(cursor)?;
-            let len = read_i32(cursor)? as usize;
+            let len = checked_len(read_i32(cursor)?, cursor)?;
             let mut list = Vec::with_capacity(len);
             for _ in 0..len {
                 list.push(read_tag(cursor, list_type)?);
@@ -261,7 +302,7 @@ fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8) -> Result<NbtValue, String
         }
         10 => read_compound(cursor),
         11 => {
-            let len = read_i32(cursor)? as usize;
+            let len = checked_len(read_i32(cursor)?, cursor)?;
             let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
                 arr.push(read_i32(cursor)?);
@@ -269,7 +310,7 @@ fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8) -> Result<NbtValue, String
             Ok(NbtValue::IntArray(arr))
         }
         12 => {
-            let len = read_i32(cursor)? as usize;
+            let len = checked_len(read_i32(cursor)?, cursor)?;
             let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
                 arr.push(read_i64(cursor)?);
@@ -335,7 +376,7 @@ fn read_f64(cursor: &mut Cursor<&[u8]>) -> Result<f64, String> {
 }
 
 fn read_string(cursor: &mut Cursor<&[u8]>) -> Result<String, String> {
-    let len = read_i16(cursor)? as usize;
+    let len = checked_len(read_i16(cursor)? as i32, cursor)?;
     let mut buf = vec![0u8; len];
     cursor.read_exact(&mut buf).map_err(|e| e.to_string())?;
     String::from_utf8(buf).map_err(|e| e.to_string())
@@ -515,7 +556,8 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
     let mut palette_entries: Vec<(i32, PaletteEntry)> = Vec::with_capacity(palette_compound.len());
     for (block_str, idx_val) in palette_compound {
         let idx = match idx_val {
-            NbtValue::Int(i) => *i,
+            // Negative indices would sign-extend to a huge `usize` on wasm32.
+            NbtValue::Int(i) if *i >= 0 => *i,
             _ => continue,
         };
 
@@ -525,6 +567,11 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
 
     palette_entries.sort_by_key(|(idx, _)| *idx);
     let max_idx = palette_entries.last().map(|(i, _)| *i).unwrap_or(0) as usize;
+    // Block data indices are u16; a palette larger than that is malformed and
+    // would only serve to force a giant allocation.
+    if max_idx >= 1 << 16 {
+        return Err(format!("Palette too large ({} entries)", max_idx + 1));
+    }
     let mut palette = vec![
         PaletteEntry {
             name: "minecraft:air".into(),
@@ -536,7 +583,7 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
         palette[idx as usize] = entry;
     }
 
-    let total_blocks = (width * height * length) as usize;
+    let total_blocks = checked_volume([width, height, length])?;
     let block_indices = decode_varint_array(&block_data_bytes, total_blocks)?;
 
     let tile_entities = if let Some(NbtValue::Compound(blocks)) = schem_data.get("Blocks") {
@@ -696,9 +743,13 @@ fn encode_varint_array(indices: &[u16]) -> Vec<i8> {
     result
 }
 
-pub fn write_schem_bytes(nbt: &NbtValue) -> Vec<u8> {
+pub fn write_schem_bytes(nbt: &NbtValue) -> Result<Vec<u8>, String> {
     let raw = serialize_nbt_value(nbt);
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    let _ = encoder.write_all(&raw);
-    encoder.finish().unwrap_or_default()
+    encoder
+        .write_all(&raw)
+        .map_err(|e| format!("GZIP encode failed: {e}"))?;
+    encoder
+        .finish()
+        .map_err(|e| format!("GZIP finish failed: {e}"))
 }
