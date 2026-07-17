@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use pumpkin_plugin_api::common::BlockPos;
-use pumpkin_plugin_api::world::World;
+use pumpkin_plugin_api::world::{self, World};
 
 use crate::parser::{Region, Schematic};
 use crate::paste::{BlockPlacement, TileEntityPlacement};
-use crate::{REVERSE_REGISTRY, resolve_and_register};
 
 const MAX_CLIPBOARD_BLOCKS: i64 = 64 * 1024 * 1024;
 
@@ -352,13 +351,11 @@ fn rotate_block_state(state_id: u16, degrees: i32) -> u16 {
         return 0;
     }
 
-    let reg = REVERSE_REGISTRY.lock().unwrap();
-    let Some(ref map) = *reg else { return state_id };
-    let Some(entry) = map.get(&state_id) else {
+    let Some(info) = world::block_state_to_info(state_id) else {
         return state_id;
     };
 
-    let mut props = entry.properties.clone();
+    let mut props: HashMap<String, String> = info.properties.into_iter().collect();
     let mut changed = false;
 
     if let Some(facing) = props.get("facing")
@@ -388,11 +385,8 @@ fn rotate_block_state(state_id: u16, degrees: i32) -> u16 {
         return state_id;
     }
 
-    let name = entry.name.clone();
-    drop(reg);
-
     let prop_vec: Vec<(String, String)> = props.into_iter().collect();
-    resolve_and_register(&name, &prop_vec).unwrap_or(state_id)
+    world::resolve_block_state(&info.name, &prop_vec).unwrap_or(state_id)
 }
 
 fn flip_block_state(state_id: u16, axis: FlipAxis) -> u16 {
@@ -400,13 +394,11 @@ fn flip_block_state(state_id: u16, axis: FlipAxis) -> u16 {
         return 0;
     }
 
-    let reg = REVERSE_REGISTRY.lock().unwrap();
-    let Some(ref map) = *reg else { return state_id };
-    let Some(entry) = map.get(&state_id) else {
+    let Some(info) = world::block_state_to_info(state_id) else {
         return state_id;
     };
 
-    let mut props = entry.properties.clone();
+    let mut props: HashMap<String, String> = info.properties.into_iter().collect();
     let mut changed = false;
 
     if let Some(facing) = props.get("facing") {
@@ -432,11 +424,8 @@ fn flip_block_state(state_id: u16, axis: FlipAxis) -> u16 {
         return state_id;
     }
 
-    let name = entry.name.clone();
-    drop(reg);
-
     let prop_vec: Vec<(String, String)> = props.into_iter().collect();
-    resolve_and_register(&name, &prop_vec).unwrap_or(state_id)
+    world::resolve_block_state(&info.name, &prop_vec).unwrap_or(state_id)
 }
 
 fn rotate_facing(facing: &str, degrees: i32) -> Option<&'static str> {
@@ -459,7 +448,6 @@ fn rotate_axis(axis: &str, degrees: i32) -> Option<&'static str> {
 
 pub(crate) fn clipboard_to_schem_data(
     clip: &Clipboard,
-    reverse_registry: &HashMap<u16, crate::parser::PaletteEntry>,
 ) -> (HashMap<String, u16>, Vec<u16>, usize) {
     let mut palette_map: HashMap<u16, u16> = HashMap::new();
     let mut palette_strings: HashMap<String, u16> = HashMap::new();
@@ -474,16 +462,16 @@ pub(crate) fn clipboard_to_schem_data(
         } else {
             let block_str = if state_id == 0 {
                 "minecraft:air".to_string()
-            } else if let Some(entry) = reverse_registry.get(&state_id) {
-                if entry.properties.is_empty() {
-                    entry.name.clone()
+            } else if let Some(info) = world::block_state_to_info(state_id) {
+                if info.properties.is_empty() {
+                    info.name
                 } else {
-                    let props: Vec<String> = entry
+                    let props: Vec<String> = info
                         .properties
                         .iter()
                         .map(|(k, v)| format!("{k}={v}"))
                         .collect();
-                    format!("{}[{}]", entry.name, props.join(","))
+                    format!("{}[{}]", info.name, props.join(","))
                 }
             } else {
                 unresolved += 1;

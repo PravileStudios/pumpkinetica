@@ -48,7 +48,6 @@ pub(crate) static PLAYER_SELECTIONS: Mutex<Option<HashMap<String, Selection>>> =
 pub(crate) static PLAYER_CLIPBOARDS: Mutex<Option<HashMap<String, Clipboard>>> = Mutex::new(None);
 pub(crate) static PLAYER_HISTORIES: Mutex<Option<HashMap<String, PlayerHistory>>> =
     Mutex::new(None);
-pub(crate) static REVERSE_REGISTRY: Mutex<Option<HashMap<u16, PaletteEntry>>> = Mutex::new(None);
 
 impl Plugin for PSchematics {
     fn new() -> Self {
@@ -79,9 +78,6 @@ impl Plugin for PSchematics {
         *PLAYER_SELECTIONS.lock().unwrap() = Some(HashMap::new());
         *PLAYER_CLIPBOARDS.lock().unwrap() = Some(HashMap::new());
         *PLAYER_HISTORIES.lock().unwrap() = Some(HashMap::new());
-        *REVERSE_REGISTRY.lock().unwrap() = Some(HashMap::new());
-
-        bootstrap_common_blocks();
 
         // Wand event handlers
         context.register_event_handler::<PlayerInteractEvent, _>(
@@ -309,24 +305,6 @@ pub(crate) fn normalize_item_name(name: &str) -> &str {
 
 // ── Block Resolution ────────────────────────────────────────────────
 
-pub(crate) fn register_reverse(state_id: u16, entry: &PaletteEntry) {
-    if let Some(ref mut reg) = *REVERSE_REGISTRY.lock().unwrap() {
-        reg.entry(state_id).or_insert_with(|| entry.clone());
-    }
-}
-
-pub(crate) fn resolve_and_register(name: &str, properties: &[(String, String)]) -> Option<u16> {
-    let id = world::resolve_block_state(name, properties)?;
-    register_reverse(
-        id,
-        &PaletteEntry {
-            name: name.to_string(),
-            properties: properties.iter().cloned().collect(),
-        },
-    );
-    Some(id)
-}
-
 pub(crate) fn resolve_fallback_block(config: &PluginConfig) -> Option<u16> {
     if config.fallback_block == "skip" {
         return None;
@@ -339,13 +317,6 @@ pub(crate) fn resolve_palette(palette: &[PaletteEntry], fallback: Option<u16>) -
         .iter()
         .map(|entry| {
             if entry.name == "minecraft:air" || entry.name == "air" {
-                register_reverse(
-                    0,
-                    &PaletteEntry {
-                        name: "minecraft:air".into(),
-                        properties: HashMap::new(),
-                    },
-                );
                 return Some(0);
             }
             let props: Vec<(String, String)> = entry
@@ -353,110 +324,7 @@ pub(crate) fn resolve_palette(palette: &[PaletteEntry], fallback: Option<u16>) -
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
-            match world::resolve_block_state(&entry.name, &props) {
-                Some(id) => {
-                    register_reverse(id, entry);
-                    Some(id)
-                }
-                None => fallback,
-            }
+            world::resolve_block_state(&entry.name, &props).or(fallback)
         })
         .collect()
-}
-
-fn bootstrap_common_blocks() {
-    let common = [
-        "minecraft:air",
-        "minecraft:stone",
-        "minecraft:granite",
-        "minecraft:polished_granite",
-        "minecraft:diorite",
-        "minecraft:polished_diorite",
-        "minecraft:andesite",
-        "minecraft:polished_andesite",
-        "minecraft:deepslate",
-        "minecraft:cobbled_deepslate",
-        "minecraft:grass_block",
-        "minecraft:dirt",
-        "minecraft:coarse_dirt",
-        "minecraft:cobblestone",
-        "minecraft:oak_planks",
-        "minecraft:spruce_planks",
-        "minecraft:birch_planks",
-        "minecraft:jungle_planks",
-        "minecraft:acacia_planks",
-        "minecraft:dark_oak_planks",
-        "minecraft:mangrove_planks",
-        "minecraft:cherry_planks",
-        "minecraft:bamboo_planks",
-        "minecraft:crimson_planks",
-        "minecraft:warped_planks",
-        "minecraft:sand",
-        "minecraft:red_sand",
-        "minecraft:gravel",
-        "minecraft:gold_ore",
-        "minecraft:iron_ore",
-        "minecraft:coal_ore",
-        "minecraft:diamond_ore",
-        "minecraft:emerald_ore",
-        "minecraft:lapis_ore",
-        "minecraft:redstone_ore",
-        "minecraft:copper_ore",
-        "minecraft:gold_block",
-        "minecraft:iron_block",
-        "minecraft:diamond_block",
-        "minecraft:emerald_block",
-        "minecraft:lapis_block",
-        "minecraft:redstone_block",
-        "minecraft:copper_block",
-        "minecraft:netherite_block",
-        "minecraft:glass",
-        "minecraft:bedrock",
-        "minecraft:obsidian",
-        "minecraft:crying_obsidian",
-        "minecraft:netherrack",
-        "minecraft:end_stone",
-        "minecraft:clay",
-        "minecraft:terracotta",
-        "minecraft:bricks",
-        "minecraft:stone_bricks",
-        "minecraft:mossy_stone_bricks",
-        "minecraft:cracked_stone_bricks",
-        "minecraft:smooth_stone",
-        "minecraft:sandstone",
-        "minecraft:red_sandstone",
-        "minecraft:prismarine",
-        "minecraft:dark_prismarine",
-        "minecraft:sea_lantern",
-        "minecraft:glowstone",
-        "minecraft:quartz_block",
-        "minecraft:purpur_block",
-        "minecraft:bookshelf",
-        "minecraft:crafting_table",
-        "minecraft:furnace",
-        "minecraft:ice",
-        "minecraft:packed_ice",
-        "minecraft:blue_ice",
-        "minecraft:snow_block",
-        "minecraft:moss_block",
-        "minecraft:mud",
-        "minecraft:mud_bricks",
-        "minecraft:tuff",
-        "minecraft:calcite",
-        "minecraft:amethyst_block",
-        "minecraft:water",
-        "minecraft:lava",
-    ];
-
-    for name in common {
-        if let Some(id) = world::resolve_block_state(name, &[]) {
-            register_reverse(
-                id,
-                &PaletteEntry {
-                    name: name.to_string(),
-                    properties: HashMap::new(),
-                },
-            );
-        }
-    }
 }

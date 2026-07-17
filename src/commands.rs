@@ -8,6 +8,7 @@ use pumpkin_plugin_api::{
     common::{BlockPos, Hand, NamedColor},
     player::ItemStack,
     text::TextComponent,
+    world,
 };
 
 use crate::clipboard::{
@@ -20,8 +21,7 @@ use crate::paste::{BlockPlacement, schedule_block_op, schedule_paste};
 use crate::selection::Selection;
 use crate::{
     ACTIVE_PASTES, PLAYER_CLIPBOARDS, PLAYER_HISTORIES, PLAYER_SELECTIONS, PLUGIN_VERSION,
-    REVERSE_REGISTRY, get_config, msg_error, msg_info, msg_success, msg_warn, resolve_and_register,
-    resolve_fallback_block, resolve_palette,
+    get_config, msg_error, msg_info, msg_success, msg_warn, resolve_fallback_block, resolve_palette,
 };
 
 fn is_safe_filename(name: &str) -> bool {
@@ -597,13 +597,7 @@ impl CommandHandler for SaveHandler {
                 ))
             })?;
 
-        let reg = REVERSE_REGISTRY.lock().unwrap();
-        let registry = reg.as_ref().ok_or_else(|| {
-            CommandError::CommandFailed(msg_error("Block registry not initialized."))
-        })?;
-
-        let (palette_strings, indices, unresolved) =
-            clipboard_to_schem_data(clip, registry);
+        let (palette_strings, indices, unresolved) = clipboard_to_schem_data(clip);
 
         let nbt = parser::build_schem_nbt(
             &palette_strings,
@@ -611,7 +605,6 @@ impl CommandHandler for SaveHandler {
             (clip.size_x, clip.size_y, clip.size_z),
         );
 
-        drop(reg);
         drop(clips);
 
         let bytes = match parser::write_schem_bytes(&nbt) {
@@ -915,10 +908,10 @@ impl CommandHandler for ReplaceHandler {
             }
         };
 
-        let from_id = resolve_and_register(&from_str, &[]).ok_or_else(|| {
+        let from_id = world::resolve_block_state(&from_str, &[]).ok_or_else(|| {
             CommandError::CommandFailed(msg_error(&format!("Unknown block: {from_str}")))
         })?;
-        let to_id = resolve_and_register(&to_str, &[]).ok_or_else(|| {
+        let to_id = world::resolve_block_state(&to_str, &[]).ok_or_else(|| {
             CommandError::CommandFailed(msg_error(&format!("Unknown block: {to_str}")))
         })?;
 
@@ -1033,7 +1026,7 @@ impl CommandHandler for SetHandler {
             }
         };
 
-        let state_id = resolve_and_register(&block_str, &[]).ok_or_else(|| {
+        let state_id = world::resolve_block_state(&block_str, &[]).ok_or_else(|| {
             CommandError::CommandFailed(msg_error(&format!("Unknown block: {block_str}")))
         })?;
 
