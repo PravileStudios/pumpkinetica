@@ -134,9 +134,7 @@ impl CommandHandler for LoadHandler {
 
 // ── Paste ───────────────────────────────────────────────────────────
 
-pub(crate) struct PasteHandler {
-    pub(crate) at_feet: bool,
-}
+pub(crate) struct PasteHandler;
 
 impl CommandHandler for PasteHandler {
     fn handle(
@@ -172,7 +170,7 @@ impl CommandHandler for PasteHandler {
                 ))
             })?;
 
-        let (work_queue, tile_entities) = clip.to_work_queue(origin, self.at_feet);
+        let (work_queue, tile_entities) = clip.to_work_queue(origin);
         let total = work_queue.len();
         let name = clip.name.clone();
         drop(clips);
@@ -321,7 +319,6 @@ impl CommandHandler for HelpHandler {
         let cmds = [
             ("/schem load <file>", "Load a schematic file"),
             ("/schem paste", "Paste clipboard or loaded schematic"),
-            ("/schem paste here", "Paste with min corner at your feet"),
             ("/schem list", "List available schematic files"),
             ("/schem info", "Show details of loaded schematic"),
             ("/schem status", "Show active operations"),
@@ -516,13 +513,6 @@ impl CommandHandler for CopyHandler {
             return Ok(1);
         }
 
-        let player_pos = player.get_position();
-        let player_block = BlockPos {
-            x: player_pos.0.floor() as i32,
-            y: player_pos.1.floor() as i32,
-            z: player_pos.2.floor() as i32,
-        };
-
         let world = player.get_world();
 
         let (blocks, tile_entities) = read_selection_chunk_batched(&world, min, max, sx, sy, sz);
@@ -536,11 +526,6 @@ impl CommandHandler for CopyHandler {
             size_x: sx,
             size_y: sy,
             size_z: sz,
-            offset: BlockPos {
-                x: player_block.x - min.x,
-                y: player_block.y - min.y,
-                z: player_block.z - min.z,
-            },
         };
 
         {
@@ -599,10 +584,17 @@ impl CommandHandler for SaveHandler {
 
         let (palette_strings, indices, unresolved) = clipboard_to_schem_data(clip);
 
+        let tile_entities: Vec<(i32, i32, i32, Vec<u8>)> = clip
+            .tile_entities
+            .iter()
+            .map(|(p, nbt)| (p.x, p.y, p.z, nbt.clone()))
+            .collect();
+
         let nbt = parser::build_schem_nbt(
             &palette_strings,
             &indices,
             (clip.size_x, clip.size_y, clip.size_z),
+            &tile_entities,
         );
 
         drop(clips);

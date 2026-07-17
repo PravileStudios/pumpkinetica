@@ -685,6 +685,7 @@ pub fn build_schem_nbt(
     palette_strings: &HashMap<String, u16>,
     indices: &[u16],
     size: (i32, i32, i32),
+    tile_entities: &[(i32, i32, i32, Vec<u8>)],
 ) -> NbtValue {
     let mut palette_compound = HashMap::with_capacity(palette_strings.len());
     for (name, &idx) in palette_strings {
@@ -693,7 +694,7 @@ pub fn build_schem_nbt(
 
     let block_data = encode_varint_array(indices);
 
-    let mut schematic_compound = HashMap::with_capacity(8);
+    let mut schematic_compound = HashMap::with_capacity(9);
     schematic_compound.insert("Version".into(), NbtValue::Int(2));
     schematic_compound.insert("DataVersion".into(), NbtValue::Int(3837));
     schematic_compound.insert("Width".into(), NbtValue::Short(size.0 as i16));
@@ -701,10 +702,25 @@ pub fn build_schem_nbt(
     schematic_compound.insert("Length".into(), NbtValue::Short(size.2 as i16));
     schematic_compound.insert("Palette".into(), NbtValue::Compound(palette_compound));
     schematic_compound.insert("BlockData".into(), NbtValue::ByteArray(block_data));
-    schematic_compound.insert(
-        "Metadata".into(),
-        NbtValue::Compound(HashMap::new()),
-    );
+    schematic_compound.insert("Metadata".into(), NbtValue::Compound(HashMap::new()));
+
+    let mut block_entities = Vec::new();
+    for (x, y, z, raw) in tile_entities {
+        let Ok(NbtValue::Compound(mut map)) = parse_nbt(raw) else {
+            continue;
+        };
+        map.insert("Pos".into(), NbtValue::IntArray(vec![*x, *y, *z]));
+        if !map.contains_key("Id")
+            && let Some(NbtValue::String(id)) = map.get("id")
+        {
+            let id = id.clone();
+            map.insert("Id".into(), NbtValue::String(id));
+        }
+        block_entities.push(NbtValue::Compound(map));
+    }
+    if !block_entities.is_empty() {
+        schematic_compound.insert("BlockEntities".into(), NbtValue::List(block_entities));
+    }
 
     NbtValue::Compound(schematic_compound)
 }

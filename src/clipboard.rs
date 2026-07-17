@@ -15,7 +15,6 @@ pub(crate) struct Clipboard {
     pub size_x: i32,
     pub size_y: i32,
     pub size_z: i32,
-    pub offset: BlockPos,
 }
 
 fn region_min(r: &Region) -> [i32; 3] {
@@ -102,11 +101,6 @@ pub(crate) fn schematic_to_clipboard(
         size_x: sx,
         size_y: sy,
         size_z: sz,
-        offset: BlockPos {
-            x: -gmin[0],
-            y: -gmin[1],
-            z: -gmin[2],
-        },
     })
 }
 
@@ -118,13 +112,7 @@ impl Clipboard {
     pub fn to_work_queue(
         &self,
         origin: BlockPos,
-        at_feet: bool,
     ) -> (Vec<BlockPlacement>, Vec<TileEntityPlacement>) {
-        let off = if at_feet {
-            BlockPos { x: 0, y: 0, z: 0 }
-        } else {
-            self.offset
-        };
         let mut queue = Vec::with_capacity(self.blocks.len());
         for y in 0..self.size_y {
             for z in 0..self.size_z {
@@ -135,9 +123,9 @@ impl Clipboard {
                     }
                     queue.push(BlockPlacement {
                         pos: BlockPos {
-                            x: origin.x - off.x + x,
-                            y: origin.y - off.y + y,
-                            z: origin.z - off.z + z,
+                            x: origin.x + x,
+                            y: origin.y + y,
+                            z: origin.z + z,
                         },
                         state_id,
                     });
@@ -148,9 +136,9 @@ impl Clipboard {
         let te_queue = self.tile_entities.iter().map(|(rel_pos, nbt)| {
             TileEntityPlacement {
                 pos: BlockPos {
-                    x: origin.x - off.x + rel_pos.x,
-                    y: origin.y - off.y + rel_pos.y,
-                    z: origin.z - off.z + rel_pos.z,
+                    x: origin.x + rel_pos.x,
+                    y: origin.y + rel_pos.y,
+                    z: origin.z + rel_pos.z,
                 },
                 nbt: nbt.clone(),
             }
@@ -284,26 +272,6 @@ pub(crate) fn rotate_clipboard(clip: &mut Clipboard, degrees: i32) {
         te.0.x = nx;
         te.0.z = nz;
     }
-
-    // Re-anchor the offset the same way block indices are re-anchored above
-    // (the `sz - 1 - z` / `sx - 1 - x` terms). A pure vector rotation would
-    // shift the paste anchor by up to size-1 blocks.
-    let (ox, oz) = (clip.offset.x, clip.offset.z);
-    match degrees {
-        90 => {
-            clip.offset.x = sz - 1 - oz;
-            clip.offset.z = ox;
-        }
-        180 => {
-            clip.offset.x = sx - 1 - ox;
-            clip.offset.z = sz - 1 - oz;
-        }
-        270 => {
-            clip.offset.x = oz;
-            clip.offset.z = sx - 1 - ox;
-        }
-        _ => {}
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -337,12 +305,6 @@ pub(crate) fn flip_clipboard(clip: &mut Clipboard, axis: FlipAxis) {
             FlipAxis::X => te.0.x = sx - 1 - te.0.x,
             FlipAxis::Z => te.0.z = sz - 1 - te.0.z,
         }
-    }
-
-    // Re-anchor the offset to match the mirrored block indices (`sx - 1 - x`).
-    match axis {
-        FlipAxis::X => clip.offset.x = sx - 1 - clip.offset.x,
-        FlipAxis::Z => clip.offset.z = sz - 1 - clip.offset.z,
     }
 }
 
