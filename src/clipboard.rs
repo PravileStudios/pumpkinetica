@@ -65,6 +65,20 @@ impl Clipboard {
     }
 }
 
+// The host serializes block-entity NBT with an unnamed root, but
+// set_block_entity_nbt parses it as named. Insert an empty root name so the
+// copied bytes round-trip and chest contents survive the paste.
+fn to_named_root(nbt: Vec<u8>) -> Vec<u8> {
+    if nbt.is_empty() {
+        return nbt;
+    }
+    let mut out = Vec::with_capacity(nbt.len() + 2);
+    out.push(nbt[0]);
+    out.extend_from_slice(&[0, 0]);
+    out.extend_from_slice(&nbt[1..]);
+    out
+}
+
 pub(crate) fn read_selection_chunk_batched(
     world: &World,
     min: BlockPos,
@@ -121,7 +135,10 @@ pub(crate) fn read_selection_chunk_batched(
                         if state_id != 0
                             && let Some(nbt) = world.get_block_entity_nbt(pos)
                         {
-                            tile_entities.push((BlockPos { x: rel_x, y: rel_y, z: rel_z }, nbt));
+                            tile_entities.push((
+                                BlockPos { x: rel_x, y: rel_y, z: rel_z },
+                                to_named_root(nbt),
+                            ));
                         }
                     }
                 }

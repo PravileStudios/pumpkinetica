@@ -125,6 +125,10 @@ impl CommandHandler for LoadHandler {
         let region_count = schematic.regions.len();
         let name = schematic.name.clone();
 
+        if let Some(ref mut m) = *PLAYER_CLIPBOARDS.lock().unwrap() {
+            m.remove(&player_name);
+        }
+
         {
             let mut map = LOADED_SCHEMATICS.lock().unwrap();
             if let Some(ref mut m) = *map {
@@ -688,6 +692,10 @@ impl CommandHandler for CopyHandler {
                 z: player_block.z - min.z,
             },
         };
+
+        if let Some(ref mut m) = *LOADED_SCHEMATICS.lock().unwrap() {
+            m.remove(&player_name);
+        }
 
         {
             let mut clips = PLAYER_CLIPBOARDS.lock().unwrap();
