@@ -112,7 +112,10 @@ impl Plugin for PSchematics {
         let load_node = CommandNode::literal("load");
         load_node.then(file_arg);
 
-        let paste_node = CommandNode::literal("paste").execute(PasteHandler);
+        let paste_here_node =
+            CommandNode::literal("here").execute(PasteHandler { at_feet: true });
+        let paste_node = CommandNode::literal("paste").execute(PasteHandler { at_feet: false });
+        paste_node.then(paste_here_node);
 
         let list_node = CommandNode::literal("list").execute(ListHandler {
             schematics_dir: schematics_dir.clone(),

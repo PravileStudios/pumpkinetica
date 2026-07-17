@@ -20,7 +20,20 @@ impl Clipboard {
         (y * self.size_x * self.size_z + z * self.size_x + x) as usize
     }
 
-    pub fn to_work_queue(&self, origin: BlockPos) -> (Vec<BlockPlacement>, Vec<TileEntityPlacement>) {
+    /// Build the paste work queue. When `at_feet` is true the copy offset is
+    /// ignored so the clipboard's minimum corner lands on `origin` (the
+    /// player's feet); otherwise the structure keeps its copy-time position
+    /// relative to the player.
+    pub fn to_work_queue(
+        &self,
+        origin: BlockPos,
+        at_feet: bool,
+    ) -> (Vec<BlockPlacement>, Vec<TileEntityPlacement>) {
+        let off = if at_feet {
+            BlockPos { x: 0, y: 0, z: 0 }
+        } else {
+            self.offset
+        };
         let mut queue = Vec::with_capacity(self.blocks.len());
         for y in 0..self.size_y {
             for z in 0..self.size_z {
@@ -31,9 +44,9 @@ impl Clipboard {
                     }
                     queue.push(BlockPlacement {
                         pos: BlockPos {
-                            x: origin.x - self.offset.x + x,
-                            y: origin.y - self.offset.y + y,
-                            z: origin.z - self.offset.z + z,
+                            x: origin.x - off.x + x,
+                            y: origin.y - off.y + y,
+                            z: origin.z - off.z + z,
                         },
                         state_id,
                     });
@@ -44,9 +57,9 @@ impl Clipboard {
         let te_queue = self.tile_entities.iter().map(|(rel_pos, nbt)| {
             TileEntityPlacement {
                 pos: BlockPos {
-                    x: origin.x - self.offset.x + rel_pos.x,
-                    y: origin.y - self.offset.y + rel_pos.y,
-                    z: origin.z - self.offset.z + rel_pos.z,
+                    x: origin.x - off.x + rel_pos.x,
+                    y: origin.y - off.y + rel_pos.y,
+                    z: origin.z - off.z + rel_pos.z,
                 },
                 nbt: nbt.clone(),
             }

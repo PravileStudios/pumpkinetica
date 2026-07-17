@@ -146,7 +146,11 @@ impl CommandHandler for LoadHandler {
 
 // ── Paste ───────────────────────────────────────────────────────────
 
-pub(crate) struct PasteHandler;
+pub(crate) struct PasteHandler {
+    /// When true, ignore the clipboard/schematic offset and anchor the
+    /// structure's minimum corner at the player's feet. `/schematic paste here`.
+    pub(crate) at_feet: bool,
+}
 
 impl CommandHandler for PasteHandler {
     fn handle(
@@ -178,7 +182,7 @@ impl CommandHandler for PasteHandler {
             if let Some(ref map) = *clips
                 && let Some(clip) = map.get(&player_name)
             {
-                let (work_queue, tile_entities) = clip.to_work_queue(origin);
+                let (work_queue, tile_entities) = clip.to_work_queue(origin, self.at_feet);
                 let total = work_queue.len();
                 let dimension = player_world.get_dimension();
 
@@ -210,25 +214,39 @@ impl CommandHandler for PasteHandler {
         let mut work_queue: Vec<BlockPlacement> = Vec::new();
         let mut tile_entities: Vec<TileEntityPlacement> = Vec::new();
 
+        // Normalized min corner of a region in paste space (folds in the
+        // negative-size flip so mirrored regions anchor at their true min).
+        let region_min = |region: &crate::parser::Region| {
+            let n = |pos: i32, size: i32| if size < 0 { pos + size + 1 } else { pos };
+            [
+                n(region.position[0], region.size[0]),
+                n(region.position[1], region.size[1]),
+                n(region.position[2], region.size[2]),
+            ]
+        };
+
+        // In `at_feet` mode, shift the whole schematic so its global minimum
+        // corner lands on the player — preserving inter-region layout.
+        let shift = if self.at_feet {
+            loaded.schematic.regions.iter().fold(
+                [i32::MAX, i32::MAX, i32::MAX],
+                |acc, region| {
+                    let m = region_min(region);
+                    [acc[0].min(m[0]), acc[1].min(m[1]), acc[2].min(m[2])]
+                },
+            )
+        } else {
+            [0, 0, 0]
+        };
+
         for (region_idx, region) in loaded.schematic.regions.iter().enumerate() {
             let [sx, sy, sz] = region.abs_size();
             let palette_map = &loaded.palette_map[region_idx];
 
-            let offset_x = if region.size[0] < 0 {
-                region.position[0] + region.size[0] + 1
-            } else {
-                region.position[0]
-            };
-            let offset_y = if region.size[1] < 0 {
-                region.position[1] + region.size[1] + 1
-            } else {
-                region.position[1]
-            };
-            let offset_z = if region.size[2] < 0 {
-                region.position[2] + region.size[2] + 1
-            } else {
-                region.position[2]
-            };
+            let m = region_min(region);
+            let offset_x = m[0] - shift[0];
+            let offset_y = m[1] - shift[1];
+            let offset_z = m[2] - shift[2];
 
             for y in 0..sy {
                 for z in 0..sz {
@@ -443,6 +461,7 @@ impl CommandHandler for HelpHandler {
         let cmds = [
             ("/schem load <file>", "Load a schematic file"),
             ("/schem paste", "Paste clipboard or loaded schematic"),
+            ("/schem paste here", "Paste with min corner at your feet"),
             ("/schem list", "List available schematic files"),
             ("/schem info", "Show details of loaded schematic"),
             ("/schem status", "Show active operations"),
