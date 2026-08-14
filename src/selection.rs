@@ -1,9 +1,9 @@
+use pumpkin_plugin_api::Server;
 use pumpkin_plugin_api::common::{BlockPos, Hand};
 use pumpkin_plugin_api::events::{
     BlockBreakEvent, EventHandler, FromIntoEvent, InteractAction, PlayerInteractEvent,
     PlayerLeaveEvent,
 };
-use pumpkin_plugin_api::Server;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -13,7 +13,7 @@ use crate::{
     normalize_item_name,
 };
 
-static WAND_DEBOUNCE: Mutex<Option<HashMap<String, BlockPos>>> = Mutex::new(None);
+static WAND_DEBOUNCE: Mutex<Option<HashMap<String, (BlockPos, bool)>>> = Mutex::new(None);
 
 pub(crate) struct Selection {
     pub pos1: BlockPos,
@@ -81,15 +81,19 @@ impl EventHandler<PlayerInteractEvent> for WandInteractHandler {
 
             let mut debounce = WAND_DEBOUNCE.lock().unwrap();
             let debounce_map = debounce.get_or_insert_with(HashMap::new);
-            let is_duplicate = debounce_map
-                .get(&player_name)
-                .is_some_and(|last_pos| {
-                    last_pos.x == clicked_pos.x
-                        && last_pos.y == clicked_pos.y
-                        && last_pos.z == clicked_pos.z
-                });
+            // Debounce per action so left- and right-clicking the same block both
+            // register (a valid one-block selection).
+            let is_duplicate =
+                debounce_map
+                    .get(&player_name)
+                    .is_some_and(|(last_pos, last_is_pos1)| {
+                        *last_is_pos1 == is_pos1
+                            && last_pos.x == clicked_pos.x
+                            && last_pos.y == clicked_pos.y
+                            && last_pos.z == clicked_pos.z
+                    });
             if !is_duplicate {
-                debounce_map.insert(player_name.clone(), clicked_pos);
+                debounce_map.insert(player_name.clone(), (clicked_pos, is_pos1));
             }
             drop(debounce);
 
@@ -141,8 +145,7 @@ impl EventHandler<BlockBreakEvent> for WandBreakCancelHandler {
             return event;
         };
 
-        if normalize_item_name(&item.get_registry_key()) == normalize_item_name(&config.wand_item)
-        {
+        if normalize_item_name(&item.get_registry_key()) == normalize_item_name(&config.wand_item) {
             event.cancelled = true;
         }
 

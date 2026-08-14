@@ -6,6 +6,22 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 
 const MAX_SCHEM_BLOCKS: i64 = 64 * 1024 * 1024;
+// Caps that stop a hostile file from exhausting memory or the stack.
+const MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_NBT_DEPTH: u32 = 512;
+
+// Decompress gzip, failing if it inflates past the size cap.
+fn gunzip_limited(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut decoder = GzDecoder::new(Cursor::new(data)).take(MAX_DECOMPRESSED_BYTES + 1);
+    let mut out = Vec::new();
+    decoder
+        .read_to_end(&mut out)
+        .map_err(|e| format!("GZIP decode failed: {e}"))?;
+    if out.len() as u64 > MAX_DECOMPRESSED_BYTES {
+        return Err("Decompressed schematic exceeds size limit".into());
+    }
+    Ok(out)
+}
 
 fn remaining(cursor: &Cursor<&[u8]>) -> usize {
     (cursor.get_ref().len() as u64).saturating_sub(cursor.position()) as usize
@@ -88,7 +104,10 @@ impl Region {
 /// Unpacks the litematica bit-packed `BlockStates` long array into one palette
 /// index per block. Entries span long boundaries (pre-1.16 packing).
 fn unpack_litematica(packed: &[i64], palette_len: usize, total: usize) -> Vec<u16> {
-    let bits = std::cmp::max(2, 32 - (palette_len as u32).saturating_sub(1).leading_zeros());
+    let bits = std::cmp::max(
+        2,
+        32 - (palette_len as u32).saturating_sub(1).leading_zeros(),
+    );
     let mask = (1u64 << bits) - 1;
 
     let mut out = Vec::with_capacity(total);
@@ -118,11 +137,7 @@ fn unpack_litematica(packed: &[i64], palette_len: usize, total: usize) -> Vec<u1
 }
 
 pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
-    let mut decoder = GzDecoder::new(Cursor::new(data));
-    let mut decompressed = Vec::new();
-    decoder
-        .read_to_end(&mut decompressed)
-        .map_err(|e| format!("GZIP decode failed: {e}"))?;
+    let decompressed = gunzip_limited(data)?;
 
     let nbt = parse_nbt(&decompressed)?;
 
@@ -152,7 +167,7 @@ pub fn parse_litematica(data: &[u8]) -> Result<Schematic, String> {
         let tile_entities = parse_tile_entities(region);
 
         let total = checked_volume(size)?;
-        let block_indices = unpack_litematica(&packed, palette.len(), total);
+        let block_indices = unpack_litematica(packed, palette.len(), total);
 
         regions.push(Region {
             position,
@@ -260,10 +275,13 @@ fn parse_nbt(data: &[u8]) -> Result<NbtValue, String> {
         return Err(format!("Expected compound root, got tag type {tag_type}"));
     }
     let _name = read_string(&mut cursor)?;
-    read_compound(&mut cursor)
+    read_compound(&mut cursor, 0)
 }
 
-fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8) -> Result<NbtValue, String> {
+fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8, depth: u32) -> Result<NbtValue, String> {
+    if depth > MAX_NBT_DEPTH {
+        return Err("NBT nesting too deep".into());
+    }
     match tag_type {
         1 => Ok(NbtValue::Byte(read_i8(cursor)?)),
         2 => Ok(NbtValue::Short(read_i16(cursor)?)),
@@ -285,11 +303,11 @@ fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8) -> Result<NbtValue, String
             let len = checked_len(read_i32(cursor)?, cursor)?;
             let mut list = Vec::with_capacity(len);
             for _ in 0..len {
-                list.push(read_tag(cursor, list_type)?);
+                list.push(read_tag(cursor, list_type, depth + 1)?);
             }
             Ok(NbtValue::List(list))
         }
-        10 => read_compound(cursor),
+        10 => read_compound(cursor, depth + 1),
         11 => {
             let len = checked_len(read_i32(cursor)?, cursor)?;
             let mut arr = Vec::with_capacity(len);
@@ -310,7 +328,10 @@ fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8) -> Result<NbtValue, String
     }
 }
 
-fn read_compound(cursor: &mut Cursor<&[u8]>) -> Result<NbtValue, String> {
+fn read_compound(cursor: &mut Cursor<&[u8]>, depth: u32) -> Result<NbtValue, String> {
+    if depth > MAX_NBT_DEPTH {
+        return Err("NBT nesting too deep".into());
+    }
     let mut map = HashMap::new();
     loop {
         let tag_type = read_u8(cursor)?;
@@ -318,7 +339,7 @@ fn read_compound(cursor: &mut Cursor<&[u8]>) -> Result<NbtValue, String> {
             break;
         }
         let name = read_string(cursor)?;
-        let value = read_tag(cursor, tag_type)?;
+        let value = read_tag(cursor, tag_type, depth + 1)?;
         map.insert(name, value);
     }
     Ok(NbtValue::Compound(map))
@@ -365,7 +386,8 @@ fn read_f64(cursor: &mut Cursor<&[u8]>) -> Result<f64, String> {
 }
 
 fn read_string(cursor: &mut Cursor<&[u8]>) -> Result<String, String> {
-    let len = checked_len(read_i16(cursor)? as i32, cursor)?;
+    // Length is an unsigned short.
+    let len = checked_len(read_i16(cursor)? as u16 as i32, cursor)?;
     let mut buf = vec![0u8; len];
     cursor.read_exact(&mut buf).map_err(|e| e.to_string())?;
     String::from_utf8(buf).map_err(|e| e.to_string())
@@ -373,8 +395,8 @@ fn read_string(cursor: &mut Cursor<&[u8]>) -> Result<String, String> {
 
 fn serialize_nbt_value(value: &NbtValue) -> Vec<u8> {
     let mut out = Vec::new();
-    out.push(10); // compound root tag
-    out.extend_from_slice(&0i16.to_be_bytes()); // empty name
+    out.push(10);
+    out.extend_from_slice(&0i16.to_be_bytes());
     write_compound_payload(&mut out, value);
     out
 }
@@ -391,7 +413,7 @@ fn write_compound_payload(out: &mut Vec<u8>, value: &NbtValue) {
         out.extend_from_slice(key_bytes);
         write_tag_payload(out, val);
     }
-    out.push(0); // end tag
+    out.push(0);
 }
 
 fn write_tag_payload(out: &mut Vec<u8>, value: &NbtValue) {
@@ -478,9 +500,9 @@ fn get_int(map: &HashMap<String, NbtValue>, key: &str) -> Option<i32> {
     }
 }
 
-fn get_long_array(map: &HashMap<String, NbtValue>, key: &str) -> Result<Vec<i64>, String> {
+fn get_long_array<'a>(map: &'a HashMap<String, NbtValue>, key: &str) -> Result<&'a [i64], String> {
     match map.get(key) {
-        Some(NbtValue::LongArray(arr)) => Ok(arr.clone()),
+        Some(NbtValue::LongArray(arr)) => Ok(arr),
         _ => Err(format!("Missing or invalid '{key}' (expected LongArray)")),
     }
 }
@@ -492,9 +514,9 @@ fn get_short(map: &HashMap<String, NbtValue>, key: &str) -> Option<i16> {
     }
 }
 
-fn get_byte_array(map: &HashMap<String, NbtValue>, key: &str) -> Option<Vec<i8>> {
+fn get_byte_array<'a>(map: &'a HashMap<String, NbtValue>, key: &str) -> Option<&'a [i8]> {
     match map.get(key) {
-        Some(NbtValue::ByteArray(arr)) => Some(arr.clone()),
+        Some(NbtValue::ByteArray(arr)) => Some(arr),
         _ => None,
     }
 }
@@ -508,39 +530,38 @@ pub fn parse_schematic(data: &[u8], filename: &str) -> Result<Schematic, String>
 }
 
 pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
-    let mut decoder = GzDecoder::new(Cursor::new(data));
-    let mut decompressed = Vec::new();
-    decoder
-        .read_to_end(&mut decompressed)
-        .map_err(|e| format!("GZIP decode failed: {e}"))?;
+    let decompressed = gunzip_limited(data)?;
 
     let nbt = parse_nbt(&decompressed)?;
 
-    let root = match &nbt {
-        NbtValue::Compound(map) => map,
-        _ => return Err("Root is not a compound".into()),
+    let NbtValue::Compound(root) = &nbt else {
+        return Err("Root is not a compound".into());
     };
 
-    let schem_data = if let Some(NbtValue::Compound(s)) = root.get("Schematic") {
-        s
+    let schem_data = match root.get("Schematic") {
+        Some(NbtValue::Compound(s)) => s,
+        _ => root,
+    };
+
+    // Dimensions are unsigned shorts.
+    let width = get_short(schem_data, "Width").ok_or("Missing Width")? as u16 as i32;
+    let height = get_short(schem_data, "Height").ok_or("Missing Height")? as u16 as i32;
+    let length = get_short(schem_data, "Length").ok_or("Missing Length")? as u16 as i32;
+
+    let blocks_compound = match schem_data.get("Blocks") {
+        Some(NbtValue::Compound(blocks)) => Some(blocks),
+        _ => None,
+    };
+
+    let (palette_compound, block_data_bytes) = if let Some(blocks) = blocks_compound {
+        let p = get_compound(blocks, "Palette").ok_or("Missing Blocks.Palette")?;
+        let d = get_byte_array(blocks, "Data").ok_or("Missing Blocks.Data")?;
+        (p, d)
     } else {
-        root
+        let p = get_compound(schem_data, "Palette").ok_or("Missing Palette")?;
+        let d = get_byte_array(schem_data, "BlockData").ok_or("Missing BlockData")?;
+        (p, d)
     };
-
-    let width = get_short(schem_data, "Width").ok_or("Missing Width")? as i32;
-    let height = get_short(schem_data, "Height").ok_or("Missing Height")? as i32;
-    let length = get_short(schem_data, "Length").ok_or("Missing Length")? as i32;
-
-    let (palette_compound, block_data_bytes) =
-        if let Some(NbtValue::Compound(blocks)) = schem_data.get("Blocks") {
-            let p = get_compound(blocks, "Palette").ok_or("Missing Blocks.Palette")?;
-            let d = get_byte_array(blocks, "Data").ok_or("Missing Blocks.Data")?;
-            (p, d)
-        } else {
-            let p = get_compound(schem_data, "Palette").ok_or("Missing Palette")?;
-            let d = get_byte_array(schem_data, "BlockData").ok_or("Missing BlockData")?;
-            (p, d)
-        };
 
     let mut palette_entries: Vec<(i32, PaletteEntry)> = Vec::with_capacity(palette_compound.len());
     for (block_str, idx_val) in palette_compound {
@@ -570,13 +591,9 @@ pub fn parse_schem(data: &[u8], filename: &str) -> Result<Schematic, String> {
     }
 
     let total_blocks = checked_volume([width, height, length])?;
-    let block_indices = decode_varint_array(&block_data_bytes, total_blocks)?;
+    let block_indices = decode_varint_array(block_data_bytes, total_blocks)?;
 
-    let tile_entities = if let Some(NbtValue::Compound(blocks)) = schem_data.get("Blocks") {
-        parse_schem_block_entities(blocks)
-    } else {
-        parse_schem_block_entities(schem_data)
-    };
+    let tile_entities = parse_schem_block_entities(blocks_compound.unwrap_or(schem_data));
 
     let name = filename.trim_end_matches(".schem").to_string();
 
@@ -596,7 +613,8 @@ fn parse_block_state_string(s: &str) -> (String, HashMap<String, String>) {
     let mut properties = HashMap::new();
     if let Some(bracket) = s.find('[') {
         let name = s[..bracket].to_string();
-        let props_str = &s[bracket + 1..s.len().saturating_sub(1)];
+        let inner = &s[bracket + 1..];
+        let props_str = inner.strip_suffix(']').unwrap_or(inner);
         for pair in props_str.split(',') {
             let pair = pair.trim();
             if let Some(eq) = pair.find('=') {

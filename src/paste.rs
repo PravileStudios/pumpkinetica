@@ -5,7 +5,7 @@ use pumpkin_plugin_api::common::BlockPos;
 use pumpkin_plugin_api::world;
 
 use crate::history::{BlockSnapshot, PlayerHistory, UndoEntry};
-use crate::{ACTIVE_PASTES, PLAYER_HISTORIES, get_config, msg_success};
+use crate::{ACTIVE_PASTES, PLAYER_HISTORIES, get_config, msg_error, msg_success, msg_warn};
 
 pub(crate) struct BlockPlacement {
     pub pos: BlockPos,
@@ -25,8 +25,9 @@ struct PasteState {
     record_undo: bool,
     old_snapshots: Vec<BlockSnapshot>,
     new_snapshots: Vec<BlockSnapshot>,
-    /// Set once the op completes so a re-fired tick (cancel_task is not
-    /// instantaneous) cannot re-run completion and underflow ACTIVE_PASTES.
+    te_failures: usize,
+    // Set once the op completes so a re-fired tick (cancel_task is not
+    // instantaneous) cannot re-run completion and underflow ACTIVE_PASTES.
     finished: bool,
 }
 
@@ -64,6 +65,8 @@ pub(crate) fn schedule_block_op(
 ) {
     ACTIVE_PASTES.fetch_add(1, Ordering::Relaxed);
 
+    // A zero rate would never advance and would leak ACTIVE_PASTES.
+    let blocks_per_tick = blocks_per_tick.max(1);
     let total_blocks: usize = queue.len();
     // Skip undo snapshots for oversized ops so history memory stays bounded
     // (peak ≈ max_undo_volume × max_undo_history per player).
@@ -85,6 +88,7 @@ pub(crate) fn schedule_block_op(
         } else {
             Vec::new()
         },
+        te_failures: 0,
         finished: false,
     }));
     let state_clone = state.clone();
@@ -112,6 +116,14 @@ pub(crate) fn schedule_block_op(
                 s.finished = true;
                 drop(s);
                 ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
+                if let Some(player) = server.get_player_by_name(&player_name) {
+                    player.send_system_message(
+                        msg_error(&format!(
+                            "{description} failed: world '{dimension}' not found"
+                        )),
+                        false,
+                    );
+                }
                 let tid = *task_id_clone.lock().unwrap();
                 pumpkin_plugin_api::scheduler::cancel_task(tid);
                 return;
@@ -145,8 +157,13 @@ pub(crate) fn schedule_block_op(
             let te_remaining = s.tile_entities.len() - s.te_idx;
             let te_batch = std::cmp::min(te_remaining, blocks_per_tick);
             for i in s.te_idx..s.te_idx + te_batch {
-                let te = &s.tile_entities[i];
-                let _ = world.set_block_entity_nbt(te.pos, &te.nbt);
+                let ok = {
+                    let te = &s.tile_entities[i];
+                    world.set_block_entity_nbt(te.pos, &te.nbt).is_ok()
+                };
+                if !ok {
+                    s.te_failures += 1;
+                }
             }
             s.te_idx += te_batch;
             return;
@@ -154,6 +171,7 @@ pub(crate) fn schedule_block_op(
 
         if s.block_idx >= s.blocks.len() && s.te_idx >= s.tile_entities.len() {
             s.finished = true;
+            let te_failures = s.te_failures;
             s.blocks = Vec::new();
             s.tile_entities = Vec::new();
 
@@ -166,12 +184,8 @@ pub(crate) fn schedule_block_op(
                     new_states: std::mem::take(&mut s.new_snapshots),
                 };
                 if let Some(ref mut histories) = *PLAYER_HISTORIES.lock().unwrap() {
-                    let pname = player_name_owned
-                        .clone()
-                        .unwrap_or_default();
-                    let history = histories
-                        .entry(pname)
-                        .or_insert_with(PlayerHistory::new);
+                    let pname = player_name_owned.clone().unwrap_or_default();
+                    let history = histories.entry(pname).or_insert_with(PlayerHistory::new);
                     history.push_undo(entry, config.max_undo_history);
                 }
             }
@@ -181,10 +195,16 @@ pub(crate) fn schedule_block_op(
             ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
 
             if let Some(player) = server.get_player_by_name(&player_name) {
-                player.send_system_message(
-                    msg_success(&format!("Completed: {description}")),
-                    false,
-                );
+                player
+                    .send_system_message(msg_success(&format!("Completed: {description}")), false);
+                if te_failures > 0 {
+                    player.send_system_message(
+                        msg_warn(&format!(
+                            "{te_failures} tile entity/entities could not be restored"
+                        )),
+                        false,
+                    );
+                }
             }
 
             let tid = *task_id_clone.lock().unwrap();

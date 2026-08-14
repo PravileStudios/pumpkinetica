@@ -121,9 +121,8 @@ impl Plugin for PSchematics {
         let wand_node = CommandNode::literal("wand").execute(WandHandler);
         let copy_node = CommandNode::literal("copy").execute(CopyHandler);
 
-        let save_arg =
-            CommandNode::argument("name", &ArgumentType::String(StringType::SingleWord))
-                .execute(SaveHandler { schematics_dir });
+        let save_arg = CommandNode::argument("name", &ArgumentType::String(StringType::SingleWord))
+            .execute(SaveHandler { schematics_dir });
         let save_node = CommandNode::literal("save");
         save_node.then(save_arg);
 
@@ -133,18 +132,16 @@ impl Plugin for PSchematics {
         let rotate_node = CommandNode::literal("rotate");
         rotate_node.then(rotate_arg);
 
-        let flip_arg =
-            CommandNode::argument("axis", &ArgumentType::String(StringType::SingleWord))
-                .execute(FlipHandler);
+        let flip_arg = CommandNode::argument("axis", &ArgumentType::String(StringType::SingleWord))
+            .execute(FlipHandler);
         let flip_node = CommandNode::literal("flip");
         flip_node.then(flip_arg);
 
         let undo_node = CommandNode::literal("undo").execute(UndoHandler);
         let redo_node = CommandNode::literal("redo").execute(RedoHandler);
 
-        let replace_to =
-            CommandNode::argument("to", &ArgumentType::String(StringType::SingleWord))
-                .execute(ReplaceHandler);
+        let replace_to = CommandNode::argument("to", &ArgumentType::String(StringType::SingleWord))
+            .execute(ReplaceHandler);
         let replace_from =
             CommandNode::argument("from", &ArgumentType::String(StringType::SingleWord));
         replace_from.then(replace_to);
@@ -262,8 +259,9 @@ fn write_default_config(path: &str) -> PluginConfig {
 pub(crate) fn load_config(data_folder: &str) -> PluginConfig {
     let path = format!("{}/config.json", data_folder);
     match std::fs::read_to_string(&path) {
-        Ok(contents) => serde_json::from_str(&contents)
-            .unwrap_or_else(|_| write_default_config(&path)),
+        // A malformed file falls back to defaults in memory but is left on disk
+        // so a stray typo can't wipe the user's settings.
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
         Err(_) => write_default_config(&path),
     }
 }

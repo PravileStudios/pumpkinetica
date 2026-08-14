@@ -133,16 +133,18 @@ impl Clipboard {
             }
         }
 
-        let te_queue = self.tile_entities.iter().map(|(rel_pos, nbt)| {
-            TileEntityPlacement {
+        let te_queue = self
+            .tile_entities
+            .iter()
+            .map(|(rel_pos, nbt)| TileEntityPlacement {
                 pos: BlockPos {
                     x: origin.x + rel_pos.x,
                     y: origin.y + rel_pos.y,
                     z: origin.z + rel_pos.z,
                 },
                 nbt: nbt.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         (queue, te_queue)
     }
@@ -219,7 +221,11 @@ pub(crate) fn read_selection_chunk_batched(
                             && let Some(nbt) = world.get_block_entity_nbt(pos)
                         {
                             tile_entities.push((
-                                BlockPos { x: rel_x, y: rel_y, z: rel_z },
+                                BlockPos {
+                                    x: rel_x,
+                                    y: rel_y,
+                                    z: rel_z,
+                                },
                                 to_named_root(nbt),
                             ));
                         }
@@ -408,9 +414,7 @@ fn rotate_axis(axis: &str, degrees: i32) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn clipboard_to_schem_data(
-    clip: &Clipboard,
-) -> (HashMap<String, u16>, Vec<u16>, usize) {
+pub(crate) fn clipboard_to_schem_data(clip: &Clipboard) -> (HashMap<String, u16>, Vec<u16>, usize) {
     let mut palette_map: HashMap<u16, u16> = HashMap::new();
     let mut palette_strings: HashMap<String, u16> = HashMap::new();
     let mut next_idx: u16 = 0;

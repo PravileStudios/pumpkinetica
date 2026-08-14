@@ -21,7 +21,8 @@ use crate::paste::{BlockPlacement, schedule_block_op, schedule_paste};
 use crate::selection::Selection;
 use crate::{
     ACTIVE_PASTES, PLAYER_CLIPBOARDS, PLAYER_HISTORIES, PLAYER_SELECTIONS, PLUGIN_VERSION,
-    get_config, msg_error, msg_info, msg_success, msg_warn, resolve_fallback_block, resolve_palette,
+    get_config, msg_error, msg_info, msg_success, msg_warn, resolve_fallback_block,
+    resolve_palette,
 };
 
 fn is_safe_filename(name: &str) -> bool {
@@ -30,6 +31,48 @@ fn is_safe_filename(name: &str) -> bool {
         && !name.contains('\\')
         && !name.contains("..")
         && !name.contains('\0')
+}
+
+// Pull a single-word argument, or fail with the given hint.
+fn simple_arg(args: &ConsumedArgs, key: &str, expected: &str) -> Result<String, CommandError> {
+    match args.get_value(key) {
+        Arg::Simple(s) => Ok(s),
+        _ => Err(CommandError::InvalidConsumption(Some(expected.into()))),
+    }
+}
+
+// The player's feet, floored to block coordinates.
+fn player_block_pos(player: &pumpkin_plugin_api::player::Player) -> BlockPos {
+    let p = player.get_position();
+    BlockPos {
+        x: p.0.floor() as i32,
+        y: p.1.floor() as i32,
+        z: p.2.floor() as i32,
+    }
+}
+
+// (min corner, max corner, dimensions, volume)
+type SelectionBounds = (BlockPos, BlockPos, (i32, i32, i32), u64);
+
+// Look up the player's selection and reject it if it exceeds the volume limit.
+fn selection_bounds(player_name: &str, max_volume: u64) -> Result<SelectionBounds, CommandError> {
+    let sel = PLAYER_SELECTIONS.lock().unwrap();
+    let map = sel
+        .as_ref()
+        .ok_or_else(|| CommandError::CommandFailed(msg_error("No selection set.")))?;
+    let s = map.get(player_name).ok_or_else(|| {
+        CommandError::CommandFailed(msg_error(
+            "No selection set. Use wand or /schematic pos1/pos2.",
+        ))
+    })?;
+    let volume = s.volume();
+    if volume > max_volume {
+        return Err(CommandError::CommandFailed(msg_error(&format!(
+            "Selection too large ({volume} blocks, max {max_volume})."
+        ))));
+    }
+    let (min, max) = s.bounds();
+    Ok((min, max, s.dimensions(), volume))
 }
 
 // ── Load ────────────────────────────────────────────────────────────
@@ -48,14 +91,7 @@ impl CommandHandler for LoadHandler {
         let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
         let player_name = player.get_name();
 
-        let file_arg = match args.get_value("file") {
-            Arg::Simple(s) => s,
-            _ => {
-                return Err(CommandError::InvalidConsumption(Some(
-                    "Expected file name".into(),
-                )));
-            }
-        };
+        let file_arg = simple_arg(&args, "file", "Expected file name")?;
 
         if !is_safe_filename(&file_arg) {
             sender.send_message(msg_error("Invalid file name."));
@@ -88,10 +124,20 @@ impl CommandHandler for LoadHandler {
             .map(|r| resolve_palette(&r.palette, fallback))
             .collect();
 
+        // Count blocks that don't natively resolve, independent of the fallback
+        // (a valid fallback fills them in palette_map, hiding the count there).
         let mut unresolved_count = 0usize;
-        for (i, pm) in palette_map.iter().enumerate() {
-            for (j, entry) in pm.iter().enumerate() {
-                if entry.is_none() && schematic.regions[i].palette[j].name != "minecraft:air" {
+        for region in &schematic.regions {
+            for entry in &region.palette {
+                if entry.name == "minecraft:air" || entry.name == "air" {
+                    continue;
+                }
+                let props: Vec<(String, String)> = entry
+                    .properties
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                if world::resolve_block_state(&entry.name, &props).is_none() {
                     unresolved_count += 1;
                 }
             }
@@ -117,15 +163,17 @@ impl CommandHandler for LoadHandler {
             "Loaded '{name}' - {region_count} region(s), {total_blocks} blocks"
         )));
 
-        if unresolved_count > 0 && config.fallback_block == "skip" {
-            sender.send_message(msg_warn(&format!(
-                "{unresolved_count} block type(s) skipped (unsupported). Use /schematic info for details."
-            )));
-        } else if unresolved_count > 0 {
-            sender.send_message(msg_warn(&format!(
-                "{unresolved_count} block type(s) replaced with {}. Use /schematic info for details.",
-                config.fallback_block
-            )));
+        if unresolved_count > 0 {
+            if fallback.is_none() {
+                sender.send_message(msg_warn(&format!(
+                    "{unresolved_count} block type(s) skipped (unsupported). Use /schematic info for details."
+                )));
+            } else {
+                sender.send_message(msg_warn(&format!(
+                    "{unresolved_count} block type(s) replaced with {}. Use /schematic info for details.",
+                    config.fallback_block
+                )));
+            }
         }
 
         Ok(0)
@@ -145,12 +193,7 @@ impl CommandHandler for PasteHandler {
     ) -> Result<i32, CommandError> {
         let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
         let player_name = player.get_name();
-        let pos = player.get_position();
-        let origin = BlockPos {
-            x: pos.0.floor() as i32,
-            y: pos.1.floor() as i32,
-            z: pos.2.floor() as i32,
-        };
+        let origin = player_block_pos(&player);
         let player_world = player.get_world();
 
         let config = get_config();
@@ -374,6 +417,38 @@ impl CommandHandler for ReloadHandler {
 
 // ── Pos1 / Pos2 ─────────────────────────────────────────────────────
 
+// Set pos1 or pos2 at the looked-at block, falling back to the player's feet.
+fn set_selection_pos(sender: &CommandSender, is_pos1: bool) -> Result<i32, CommandError> {
+    let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
+    let player_name = player.get_name();
+    let entity = player.as_entity();
+
+    let pos = match entity.raycast(5.0, false) {
+        Some(hit) => hit.pos,
+        None => player_block_pos(&player),
+    };
+
+    let mut sel = PLAYER_SELECTIONS.lock().unwrap();
+    if let Some(ref mut map) = *sel {
+        let entry = map.entry(player_name).or_insert(Selection {
+            pos1: pos,
+            pos2: pos,
+        });
+        if is_pos1 {
+            entry.pos1 = pos;
+        } else {
+            entry.pos2 = pos;
+        }
+    }
+
+    let label = if is_pos1 { "Pos1" } else { "Pos2" };
+    sender.send_message(msg_info(&format!(
+        "{label} set to ({}, {}, {})",
+        pos.x, pos.y, pos.z
+    )));
+    Ok(0)
+}
+
 pub(crate) struct Pos1Handler;
 
 impl CommandHandler for Pos1Handler {
@@ -383,35 +458,7 @@ impl CommandHandler for Pos1Handler {
         _server: Server,
         _args: ConsumedArgs,
     ) -> Result<i32, CommandError> {
-        let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
-        let player_name = player.get_name();
-        let entity = player.as_entity();
-
-        let pos = if let Some(hit) = entity.raycast(5.0, false) {
-            hit.pos
-        } else {
-            let p = player.get_position();
-            BlockPos {
-                x: p.0.floor() as i32,
-                y: p.1.floor() as i32,
-                z: p.2.floor() as i32,
-            }
-        };
-
-        let mut sel = PLAYER_SELECTIONS.lock().unwrap();
-        if let Some(ref mut map) = *sel {
-            let entry = map.entry(player_name).or_insert(Selection {
-                pos1: pos,
-                pos2: pos,
-            });
-            entry.pos1 = pos;
-        }
-
-        sender.send_message(msg_info(&format!(
-            "Pos1 set to ({}, {}, {})",
-            pos.x, pos.y, pos.z
-        )));
-        Ok(0)
+        set_selection_pos(&sender, true)
     }
 }
 
@@ -424,35 +471,7 @@ impl CommandHandler for Pos2Handler {
         _server: Server,
         _args: ConsumedArgs,
     ) -> Result<i32, CommandError> {
-        let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
-        let player_name = player.get_name();
-        let entity = player.as_entity();
-
-        let pos = if let Some(hit) = entity.raycast(5.0, false) {
-            hit.pos
-        } else {
-            let p = player.get_position();
-            BlockPos {
-                x: p.0.floor() as i32,
-                y: p.1.floor() as i32,
-                z: p.2.floor() as i32,
-            }
-        };
-
-        let mut sel = PLAYER_SELECTIONS.lock().unwrap();
-        if let Some(ref mut map) = *sel {
-            let entry = map.entry(player_name).or_insert(Selection {
-                pos1: pos,
-                pos2: pos,
-            });
-            entry.pos2 = pos;
-        }
-
-        sender.send_message(msg_info(&format!(
-            "Pos2 set to ({}, {}, {})",
-            pos.x, pos.y, pos.z
-        )));
-        Ok(0)
+        set_selection_pos(&sender, false)
     }
 }
 
@@ -494,24 +513,8 @@ impl CommandHandler for CopyHandler {
         let player_name = player.get_name();
         let config = get_config();
 
-        let ((min, max), (sx, sy, sz), volume) = {
-            let sel = PLAYER_SELECTIONS.lock().unwrap();
-            let map = sel
-                .as_ref()
-                .ok_or_else(|| CommandError::CommandFailed(msg_error("No selection set.")))?;
-            let s = map
-                .get(&player_name)
-                .ok_or_else(|| CommandError::CommandFailed(msg_error("No selection set. Use wand or /schematic pos1/pos2.")))?;
-            (s.bounds(), s.dimensions(), s.volume())
-        };
-
-        if volume > config.max_selection_volume {
-            sender.send_message(msg_error(&format!(
-                "Selection too large ({volume} blocks, max {}).",
-                config.max_selection_volume
-            )));
-            return Ok(1);
-        }
+        let (min, max, (sx, sy, sz), _volume) =
+            selection_bounds(&player_name, config.max_selection_volume)?;
 
         let world = player.get_world();
 
@@ -558,14 +561,7 @@ impl CommandHandler for SaveHandler {
         let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
         let player_name = player.get_name();
 
-        let name = match args.get_value("name") {
-            Arg::Simple(s) => s,
-            _ => {
-                return Err(CommandError::InvalidConsumption(Some(
-                    "Expected schematic name".into(),
-                )));
-            }
-        };
+        let name = simple_arg(&args, "name", "Expected schematic name")?;
 
         if !is_safe_filename(&name) {
             sender.send_message(msg_error("Invalid schematic name."));
@@ -577,9 +573,7 @@ impl CommandHandler for SaveHandler {
             .as_ref()
             .and_then(|m| m.get(&player_name))
             .ok_or_else(|| {
-                CommandError::CommandFailed(msg_error(
-                    "No clipboard. Use /schematic copy first.",
-                ))
+                CommandError::CommandFailed(msg_error("No clipboard. Use /schematic copy first."))
             })?;
 
         let (palette_strings, indices, unresolved) = clipboard_to_schem_data(clip);
@@ -616,7 +610,10 @@ impl CommandHandler for SaveHandler {
 
         match std::fs::write(&path, &bytes) {
             Ok(()) => {
-                sender.send_message(msg_success(&format!("Saved '{filename}' ({} bytes)", bytes.len())));
+                sender.send_message(msg_success(&format!(
+                    "Saved '{filename}' ({} bytes)",
+                    bytes.len()
+                )));
                 if unresolved > 0 {
                     sender.send_message(msg_warn(&format!(
                         "{unresolved} block type(s) could not be identified and were saved as stone."
@@ -646,14 +643,7 @@ impl CommandHandler for RotateHandler {
         let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
         let player_name = player.get_name();
 
-        let degrees_str = match args.get_value("degrees") {
-            Arg::Simple(s) => s,
-            _ => {
-                return Err(CommandError::InvalidConsumption(Some(
-                    "Expected degrees (90, 180, 270)".into(),
-                )));
-            }
-        };
+        let degrees_str = simple_arg(&args, "degrees", "Expected degrees (90, 180, 270)")?;
 
         let degrees: i32 = match degrees_str.parse() {
             Ok(d) if d == 90 || d == 180 || d == 270 => d,
@@ -695,14 +685,7 @@ impl CommandHandler for FlipHandler {
         let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
         let player_name = player.get_name();
 
-        let axis_str = match args.get_value("axis") {
-            Arg::Simple(s) => s,
-            _ => {
-                return Err(CommandError::InvalidConsumption(Some(
-                    "Expected axis (x or z)".into(),
-                )));
-            }
-        };
+        let axis_str = simple_arg(&args, "axis", "Expected axis (x or z)")?;
 
         let axis = match axis_str.as_str() {
             "x" | "X" => FlipAxis::X,
@@ -730,6 +713,87 @@ impl CommandHandler for FlipHandler {
 
 // ── Undo ────────────────────────────────────────────────────────────
 
+// Undo pops the last op and restores its old states; redo mirrors it with the
+// new states. The popped entry moves to the opposite stack.
+fn run_history_op(sender: &CommandSender, is_undo: bool) -> Result<i32, CommandError> {
+    let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
+    let player_name = player.get_name();
+    let config = get_config();
+
+    let noun = if is_undo { "undo" } else { "redo" };
+    let entry = {
+        let mut histories = PLAYER_HISTORIES.lock().unwrap();
+        let history = histories
+            .as_mut()
+            .and_then(|m| m.get_mut(&player_name))
+            .ok_or_else(|| {
+                CommandError::CommandFailed(msg_error(&format!("Nothing to {noun}.")))
+            })?;
+        let stack = if is_undo {
+            &mut history.undo_stack
+        } else {
+            &mut history.redo_stack
+        };
+        let Some(entry) = stack.pop_back() else {
+            return Err(CommandError::CommandFailed(msg_error(&format!(
+                "Nothing to {noun}."
+            ))));
+        };
+        entry
+    };
+
+    let states = if is_undo {
+        &entry.old_states
+    } else {
+        &entry.new_states
+    };
+    let block_count = states.len();
+    let desc = entry.description.clone();
+    let dimension = entry.dimension.clone();
+    let work_queue: Vec<BlockPlacement> = states
+        .iter()
+        .map(|s| BlockPlacement {
+            pos: s.pos,
+            state_id: s.state_id,
+        })
+        .collect();
+
+    {
+        let mut histories = PLAYER_HISTORIES.lock().unwrap();
+        if let Some(ref mut map) = *histories {
+            let history = map
+                .entry(player_name.clone())
+                .or_insert_with(PlayerHistory::new);
+            if is_undo {
+                history.redo_stack.push_back(entry);
+            } else {
+                history.undo_stack.push_back(entry);
+            }
+        }
+    }
+
+    let (verb, prefix) = if is_undo {
+        ("Undoing", "Undo")
+    } else {
+        ("Redoing", "Redo")
+    };
+    sender.send_message(msg_info(&format!(
+        "{verb}: {desc} ({block_count} blocks)..."
+    )));
+
+    schedule_block_op(
+        work_queue,
+        vec![],
+        dimension,
+        config.blocks_per_tick,
+        player_name,
+        format!("{prefix}: {desc}"),
+        false,
+    );
+
+    Ok(0)
+}
+
 pub(crate) struct UndoHandler;
 
 impl CommandHandler for UndoHandler {
@@ -739,63 +803,7 @@ impl CommandHandler for UndoHandler {
         _server: Server,
         _args: ConsumedArgs,
     ) -> Result<i32, CommandError> {
-        let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
-        let player_name = player.get_name();
-        let config = get_config();
-
-        let entry = {
-            let mut histories = PLAYER_HISTORIES.lock().unwrap();
-            let history = histories
-                .as_mut()
-                .and_then(|m| m.get_mut(&player_name))
-                .ok_or_else(|| CommandError::CommandFailed(msg_error("Nothing to undo.")))?;
-
-            let Some(entry) = history.undo_stack.pop_back() else {
-                return Err(CommandError::CommandFailed(msg_error("Nothing to undo.")));
-            };
-            entry
-        };
-
-        let block_count = entry.old_states.len();
-        let desc = entry.description.clone();
-        let dimension = entry.dimension.clone();
-
-        // Build work queue from old states (restore)
-        let work_queue: Vec<BlockPlacement> = entry
-            .old_states
-            .iter()
-            .map(|s| BlockPlacement {
-                pos: s.pos,
-                state_id: s.state_id,
-            })
-            .collect();
-
-        // Push to redo before we move the entry
-        {
-            let mut histories = PLAYER_HISTORIES.lock().unwrap();
-            if let Some(ref mut map) = *histories {
-                let history = map
-                    .entry(player_name.clone())
-                    .or_insert_with(PlayerHistory::new);
-                history.redo_stack.push_back(entry);
-            }
-        }
-
-        sender.send_message(msg_info(&format!(
-            "Undoing: {desc} ({block_count} blocks)..."
-        )));
-
-        schedule_block_op(
-            work_queue,
-            vec![],
-            dimension,
-            config.blocks_per_tick,
-            player_name,
-            format!("Undo: {desc}"),
-            false,
-        );
-
-        Ok(0)
+        run_history_op(&sender, true)
     }
 }
 
@@ -810,61 +818,7 @@ impl CommandHandler for RedoHandler {
         _server: Server,
         _args: ConsumedArgs,
     ) -> Result<i32, CommandError> {
-        let player = sender.as_player().ok_or(CommandError::InvalidRequirement)?;
-        let player_name = player.get_name();
-        let config = get_config();
-
-        let entry = {
-            let mut histories = PLAYER_HISTORIES.lock().unwrap();
-            let history = histories
-                .as_mut()
-                .and_then(|m| m.get_mut(&player_name))
-                .ok_or_else(|| CommandError::CommandFailed(msg_error("Nothing to redo.")))?;
-
-            let Some(entry) = history.redo_stack.pop_back() else {
-                return Err(CommandError::CommandFailed(msg_error("Nothing to redo.")));
-            };
-            entry
-        };
-
-        let block_count = entry.new_states.len();
-        let desc = entry.description.clone();
-        let dimension = entry.dimension.clone();
-
-        let work_queue: Vec<BlockPlacement> = entry
-            .new_states
-            .iter()
-            .map(|s| BlockPlacement {
-                pos: s.pos,
-                state_id: s.state_id,
-            })
-            .collect();
-
-        {
-            let mut histories = PLAYER_HISTORIES.lock().unwrap();
-            if let Some(ref mut map) = *histories {
-                let history = map
-                    .entry(player_name.clone())
-                    .or_insert_with(PlayerHistory::new);
-                history.undo_stack.push_back(entry);
-            }
-        }
-
-        sender.send_message(msg_info(&format!(
-            "Redoing: {desc} ({block_count} blocks)..."
-        )));
-
-        schedule_block_op(
-            work_queue,
-            vec![],
-            dimension,
-            config.blocks_per_tick,
-            player_name,
-            format!("Redo: {desc}"),
-            false,
-        );
-
-        Ok(0)
+        run_history_op(&sender, false)
     }
 }
 
@@ -883,22 +837,8 @@ impl CommandHandler for ReplaceHandler {
         let player_name = player.get_name();
         let config = get_config();
 
-        let from_str = match args.get_value("from") {
-            Arg::Simple(s) => s,
-            _ => {
-                return Err(CommandError::InvalidConsumption(Some(
-                    "Expected source block".into(),
-                )));
-            }
-        };
-        let to_str = match args.get_value("to") {
-            Arg::Simple(s) => s,
-            _ => {
-                return Err(CommandError::InvalidConsumption(Some(
-                    "Expected target block".into(),
-                )));
-            }
-        };
+        let from_str = simple_arg(&args, "from", "Expected source block")?;
+        let to_str = simple_arg(&args, "to", "Expected target block")?;
 
         let from_id = world::resolve_block_state(&from_str, &[]).ok_or_else(|| {
             CommandError::CommandFailed(msg_error(&format!("Unknown block: {from_str}")))
@@ -907,24 +847,8 @@ impl CommandHandler for ReplaceHandler {
             CommandError::CommandFailed(msg_error(&format!("Unknown block: {to_str}")))
         })?;
 
-        let (min, max, volume) = {
-            let sel = PLAYER_SELECTIONS.lock().unwrap();
-            let map = sel
-                .as_ref()
-                .ok_or_else(|| CommandError::CommandFailed(msg_error("No selection set.")))?;
-            let s = map.get(&player_name).ok_or_else(|| {
-                CommandError::CommandFailed(msg_error("No selection set."))
-            })?;
-            let (min, max) = s.bounds();
-            (min, max, s.volume())
-        };
-
-        if volume > config.max_selection_volume {
-            sender.send_message(msg_error(&format!(
-                "Selection too large ({volume} blocks)."
-            )));
-            return Ok(1);
-        }
+        let (min, max, _dims, _volume) =
+            selection_bounds(&player_name, config.max_selection_volume)?;
 
         let world = player.get_world();
         let dimension = world.get_dimension();
@@ -1009,37 +933,14 @@ impl CommandHandler for SetHandler {
         let player_name = player.get_name();
         let config = get_config();
 
-        let block_str = match args.get_value("block") {
-            Arg::Simple(s) => s,
-            _ => {
-                return Err(CommandError::InvalidConsumption(Some(
-                    "Expected block name".into(),
-                )));
-            }
-        };
+        let block_str = simple_arg(&args, "block", "Expected block name")?;
 
         let state_id = world::resolve_block_state(&block_str, &[]).ok_or_else(|| {
             CommandError::CommandFailed(msg_error(&format!("Unknown block: {block_str}")))
         })?;
 
-        let (min, max, volume) = {
-            let sel = PLAYER_SELECTIONS.lock().unwrap();
-            let map = sel
-                .as_ref()
-                .ok_or_else(|| CommandError::CommandFailed(msg_error("No selection set.")))?;
-            let s = map.get(&player_name).ok_or_else(|| {
-                CommandError::CommandFailed(msg_error("No selection set."))
-            })?;
-            let (min, max) = s.bounds();
-            (min, max, s.volume())
-        };
-
-        if volume > config.max_selection_volume {
-            sender.send_message(msg_error(&format!(
-                "Selection too large ({volume} blocks)."
-            )));
-            return Ok(1);
-        }
+        let (min, max, _dims, volume) =
+            selection_bounds(&player_name, config.max_selection_volume)?;
 
         let mut work_queue = Vec::with_capacity(volume as usize);
         for y in min.y..=max.y {
