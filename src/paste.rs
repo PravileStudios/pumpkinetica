@@ -5,7 +5,9 @@ use pumpkin_plugin_api::common::BlockPos;
 use pumpkin_plugin_api::world;
 
 use crate::history::{BlockSnapshot, PlayerHistory, UndoEntry};
-use crate::{ACTIVE_PASTES, PLAYER_HISTORIES, get_config, msg_error, msg_success, msg_warn};
+use crate::{
+    ACTIVE_PASTES, PLAYER_HISTORIES, debug_log, get_config, msg_error, msg_success, msg_warn,
+};
 
 pub(crate) struct BlockPlacement {
     pub pos: BlockPos,
@@ -116,6 +118,9 @@ pub(crate) fn schedule_block_op(
                 s.finished = true;
                 drop(s);
                 ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
+                debug_log(&format!(
+                    "{description} aborted: world '{dimension}' not found"
+                ));
                 if let Some(player) = server.get_player_by_name(&player_name) {
                     player.send_system_message(
                         msg_error(&format!(
@@ -190,9 +195,13 @@ pub(crate) fn schedule_block_op(
                 }
             }
 
+            let block_count = total_blocks;
             drop(s);
 
             ACTIVE_PASTES.fetch_sub(1, Ordering::Relaxed);
+            debug_log(&format!(
+                "{description} complete: {block_count} block(s), {te_failures} tile-entity failure(s)"
+            ));
 
             if let Some(player) = server.get_player_by_name(&player_name) {
                 player

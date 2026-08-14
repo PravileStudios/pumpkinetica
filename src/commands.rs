@@ -21,7 +21,7 @@ use crate::paste::{BlockPlacement, schedule_block_op, schedule_paste};
 use crate::selection::Selection;
 use crate::{
     ACTIVE_PASTES, PLAYER_CLIPBOARDS, PLAYER_HISTORIES, PLAYER_SELECTIONS, PLUGIN_VERSION,
-    get_config, msg_error, msg_info, msg_success, msg_warn, resolve_fallback_block,
+    debug_log, get_config, msg_error, msg_info, msg_success, msg_warn, resolve_fallback_block,
     resolve_palette,
 };
 
@@ -110,6 +110,7 @@ impl CommandHandler for LoadHandler {
         let schematic = match parser::parse_schematic(&data, &file_arg) {
             Ok(s) => s,
             Err(e) => {
+                debug_log(&format!("parse failed for '{file_arg}': {e}"));
                 sender.send_message(msg_error(&format!("Parse error: {e}")));
                 return Ok(1);
             }
@@ -158,6 +159,10 @@ impl CommandHandler for LoadHandler {
         if let Some(ref mut m) = *PLAYER_CLIPBOARDS.lock().unwrap() {
             m.insert(player_name, clip);
         }
+
+        debug_log(&format!(
+            "loaded '{file_arg}' as '{name}': {region_count} region(s), {total_blocks} block(s), {unresolved_count} unresolved"
+        ));
 
         sender.send_message(msg_success(&format!(
             "Loaded '{name}' - {region_count} region(s), {total_blocks} blocks"
@@ -219,6 +224,15 @@ impl CommandHandler for PasteHandler {
         drop(clips);
 
         let dimension = player_world.get_dimension();
+
+        debug_log(&format!(
+            "paste '{name}' by {player_name}: {total} block(s), {} tile entity/entities in '{dimension}' at ({}, {}, {}), {} block(s)/tick",
+            tile_entities.len(),
+            origin.x,
+            origin.y,
+            origin.z,
+            config.blocks_per_tick
+        ));
 
         sender.send_message(msg_info(&format!("Pasting '{name}' ({total} blocks)...")));
 
@@ -410,6 +424,7 @@ impl CommandHandler for ReloadHandler {
             config.wand_item, config.blocks_per_tick, config.max_concurrent_pastes
         );
         *crate::CONFIG.lock().unwrap() = Some(config);
+        debug_log("config reloaded");
         sender.send_message(msg_success(&reload_msg));
         Ok(0)
     }
@@ -777,6 +792,9 @@ fn run_history_op(sender: &CommandSender, is_undo: bool) -> Result<i32, CommandE
     } else {
         ("Redoing", "Redo")
     };
+    debug_log(&format!(
+        "{noun} by {player_name}: {block_count} block(s) in '{dimension}' ({desc})"
+    ));
     sender.send_message(msg_info(&format!(
         "{verb}: {desc} ({block_count} blocks)..."
     )));

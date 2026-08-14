@@ -210,6 +210,9 @@ pub(crate) struct PluginConfig {
     /// ops run without undo to bound memory (peak ≈ this × max_undo_history).
     #[serde(default = "default_max_undo_volume")]
     pub max_undo_volume: u64,
+    /// When true, emit diagnostic log lines to the server console.
+    #[serde(default = "default_debug")]
+    pub debug: bool,
 }
 
 fn default_fallback_block() -> String {
@@ -233,6 +236,9 @@ fn default_max_selection_volume() -> u64 {
 fn default_max_undo_volume() -> u64 {
     1_000_000
 }
+fn default_debug() -> bool {
+    false
+}
 
 impl Default for PluginConfig {
     fn default() -> Self {
@@ -244,6 +250,7 @@ impl Default for PluginConfig {
             max_undo_history: default_max_undo_history(),
             max_selection_volume: default_max_selection_volume(),
             max_undo_volume: default_max_undo_volume(),
+            debug: default_debug(),
         }
     }
 }
@@ -268,6 +275,17 @@ pub(crate) fn load_config(data_folder: &str) -> PluginConfig {
 
 pub(crate) fn get_config() -> PluginConfig {
     CONFIG.lock().unwrap().clone().unwrap_or_default()
+}
+
+// Emit a diagnostic line to the server console when debug mode is on.
+pub(crate) fn debug_log(msg: &str) {
+    let enabled = CONFIG.lock().unwrap().as_ref().is_some_and(|c| c.debug);
+    if enabled {
+        pumpkin_plugin_api::logging::log(
+            pumpkin_plugin_api::logging::LogLevel::Info,
+            &format!("{PREFIX}[debug] {msg}"),
+        );
+    }
 }
 
 // ── Messaging ───────────────────────────────────────────────────────
