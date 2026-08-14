@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use pumpkin_plugin_api::common::BlockPos;
 use pumpkin_plugin_api::world::{self, World};
 
-use crate::parser::{Region, Schematic};
+use crate::parser::{self, Region, Schematic};
 use crate::paste::{BlockPlacement, TileEntityPlacement};
 
 const MAX_CLIPBOARD_BLOCKS: i64 = 64 * 1024 * 1024;
@@ -136,18 +136,53 @@ impl Clipboard {
         let te_queue = self
             .tile_entities
             .iter()
-            .map(|(rel_pos, nbt)| TileEntityPlacement {
-                pos: BlockPos {
+            .map(|(rel_pos, nbt)| {
+                let pos = BlockPos {
                     x: origin.x + rel_pos.x,
                     y: origin.y + rel_pos.y,
                     z: origin.z + rel_pos.z,
-                },
-                nbt: nbt.clone(),
+                };
+                let fallback_id = self
+                    .blocks
+                    .get(self.idx(rel_pos.x, rel_pos.y, rel_pos.z))
+                    .filter(|&&s| s != 0)
+                    .and_then(|&s| world::block_state_to_info(s))
+                    .map(|info| block_entity_id(&info.name));
+                let nbt = parser::rewrite_block_entity_nbt(
+                    nbt,
+                    fallback_id.as_deref(),
+                    pos.x,
+                    pos.y,
+                    pos.z,
+                );
+                TileEntityPlacement { pos, nbt }
             })
             .collect();
 
         (queue, te_queue)
     }
+}
+
+// Block registry name -> block-entity id. Most match the block name; some
+// families collapse every variant onto one id (host's `*BlockEntity::ID`).
+fn block_entity_id(block_name: &str) -> String {
+    let n = block_name.strip_prefix("minecraft:").unwrap_or(block_name);
+    let base = if n.ends_with("shulker_box") {
+        "shulker_box"
+    } else if n.ends_with("hanging_sign") {
+        "hanging_sign"
+    } else if n.ends_with("sign") {
+        "sign"
+    } else if n.ends_with("bed") {
+        "bed"
+    } else if n.ends_with("banner") {
+        "banner"
+    } else if n.ends_with("skull") || n.ends_with("head") {
+        "skull"
+    } else {
+        n
+    };
+    format!("minecraft:{base}")
 }
 
 // The host serializes block-entity NBT with an unnamed root, but

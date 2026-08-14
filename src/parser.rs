@@ -393,6 +393,47 @@ fn read_string(cursor: &mut Cursor<&[u8]>) -> Result<String, String> {
     String::from_utf8(buf).map_err(|e| e.to_string())
 }
 
+/// Normalize a block-entity blob into the host's expected shape: lowercase
+/// `id` plus int `x`/`y`/`z`. Sponge carries `Id`/`Pos`, Litematica omits `id`
+/// (supplied via `id_fallback`); without a valid `id` the host never wakes the
+/// block entity and its GUI stays dead. Returns `raw` unchanged if unparseable.
+pub fn rewrite_block_entity_nbt(
+    raw: &[u8],
+    id_fallback: Option<&str>,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> Vec<u8> {
+    let Ok(NbtValue::Compound(mut map)) = parse_nbt(raw) else {
+        return raw.to_vec();
+    };
+
+    let mut id = get_string(&map, "id");
+    if id.is_none()
+        && let Some(NbtValue::String(s)) = map.remove("Id")
+    {
+        id = Some(s);
+    }
+    if id.is_none() {
+        id = id_fallback.map(str::to_string);
+    }
+    if let Some(id) = id {
+        map.insert("id".into(), NbtValue::String(id));
+    }
+
+    map.remove("Pos");
+    map.insert("x".into(), NbtValue::Int(x));
+    map.insert("y".into(), NbtValue::Int(y));
+    map.insert("z".into(), NbtValue::Int(z));
+
+    // Unnamed root: tag byte + content, no name. The host's `read_unnamed`
+    // treats a prepended empty name as an END tag and drops the payload.
+    let mut out = Vec::new();
+    out.push(10);
+    write_compound_payload(&mut out, &NbtValue::Compound(map));
+    out
+}
+
 fn serialize_nbt_value(value: &NbtValue) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(10);
