@@ -393,17 +393,11 @@ fn read_string(cursor: &mut Cursor<&[u8]>) -> Result<String, String> {
     String::from_utf8(buf).map_err(|e| e.to_string())
 }
 
-/// Normalize a block-entity blob into the host's expected shape: lowercase
-/// `id` plus int `x`/`y`/`z`. Sponge carries `Id`/`Pos`, Litematica omits `id`
-/// (supplied via `id_fallback`); without a valid `id` the host never wakes the
-/// block entity and its GUI stays dead. Returns `raw` unchanged if unparseable.
-pub fn rewrite_block_entity_nbt(
-    raw: &[u8],
-    id_fallback: Option<&str>,
-    x: i32,
-    y: i32,
-    z: i32,
-) -> Vec<u8> {
+/// Give a block-entity blob the lowercase `id` the host needs to wake it (the
+/// host fills in `x`/`y`/`z` itself). Sponge carries `Id`, Litematica omits it
+/// (supplied via `id_fallback`); without a valid `id` the block entity never
+/// wakes and its GUI stays dead. Returns `raw` unchanged if unparseable.
+pub fn rewrite_block_entity_nbt(raw: &[u8], id_fallback: Option<&str>) -> Vec<u8> {
     let Ok(NbtValue::Compound(mut map)) = parse_nbt(raw) else {
         return raw.to_vec();
     };
@@ -414,17 +408,10 @@ pub fn rewrite_block_entity_nbt(
     {
         id = Some(s);
     }
-    if id.is_none() {
-        id = id_fallback.map(str::to_string);
-    }
-    if let Some(id) = id {
+    if let Some(id) = id.or_else(|| id_fallback.map(str::to_string)) {
         map.insert("id".into(), NbtValue::String(id));
     }
-
     map.remove("Pos");
-    map.insert("x".into(), NbtValue::Int(x));
-    map.insert("y".into(), NbtValue::Int(y));
-    map.insert("z".into(), NbtValue::Int(z));
 
     // Unnamed root: tag byte + content, no name. The host's `read_unnamed`
     // treats a prepended empty name as an END tag and drops the payload.

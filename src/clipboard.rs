@@ -148,13 +148,7 @@ impl Clipboard {
                     .filter(|&&s| s != 0)
                     .and_then(|&s| world::block_state_to_info(s))
                     .map(|info| block_entity_id(&info.name));
-                let nbt = parser::rewrite_block_entity_nbt(
-                    nbt,
-                    fallback_id.as_deref(),
-                    pos.x,
-                    pos.y,
-                    pos.z,
-                );
+                let nbt = parser::rewrite_block_entity_nbt(nbt, fallback_id.as_deref());
                 TileEntityPlacement { pos, nbt }
             })
             .collect();
