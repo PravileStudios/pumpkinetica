@@ -97,19 +97,6 @@ Adding a new config key? Existing `config.json` files keep their values — new 
 4. Stand at the origin point.
 5. `/schem paste`. Use `/schem undo` to revert.
 
-## Project Structure
-
-```
-src/
-├── lib.rs        — Plugin entry, config, messaging, block resolution
-├── commands.rs   — Command handlers
-├── selection.rs  — Wand + pos1/pos2 selection state
-├── clipboard.rs  — Clipboard model, rotate/flip, block-entity normalization
-├── paste.rs      — Paste engine (chunk batching, tick scheduler)
-├── history.rs    — Per-player undo/redo
-└── parser.rs     — Format parsers (.litematica + .schem) and NBT parser
-```
-
 ## License
 
 MIT
