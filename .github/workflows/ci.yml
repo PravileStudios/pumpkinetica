@@ -72,12 +72,12 @@ jobs:
       - name: Componentize
         run: |
           wasm-tools component new \
-            target/wasm32-wasip1/release/pschematics.wasm \
-            -o pschematics.wasm \
+            target/wasm32-wasip1/release/pumpkinetica.wasm \
+            -o pumpkinetica.wasm \
             --adapt wasi_snapshot_preview1.reactor.wasm
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pschematics.wasm
-          path: pschematics.wasm
+          name: pumpkinetica.wasm
+          path: pumpkinetica.wasm
