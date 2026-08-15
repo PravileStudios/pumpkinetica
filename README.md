@@ -1,4 +1,4 @@
-# PSchematics
+# Pumpkinetica
 
 A [Pumpkin MC](https://github.com/Pumpkin-MC/Pumpkin) plugin that loads and pastes `.litematica` and `.schem` schematics into the world.
 
@@ -28,19 +28,19 @@ Built as a WASM plugin using the Pumpkin Plugin API.
 
 Alias: `/schem` works the same as `/schematic`.
 
-Requires `pschematics:command.schematic` permission (OP level 2 by default).
+Requires `pumpkinetica:command.schematic` permission (OP level 2 by default).
 
 ## Installation
 
 1. Build the plugin:
 ```bash
 cargo build --target wasm32-wasip1 --release
-wasm-tools component new target/wasm32-wasip1/release/pschematics.wasm \
-  -o pschematics_component.wasm \
+wasm-tools component new target/wasm32-wasip1/release/pumpkinetica.wasm \
+  -o pumpkinetica_component.wasm \
   --adapt wasi_snapshot_preview1.reactor.wasm
 ```
 
-2. Copy `pschematics_component.wasm` to your Pumpkin server's `plugins/` directory as `pschematics.wasm`.
+2. Copy `pumpkinetica_component.wasm` to your Pumpkin server's `plugins/` directory as `pumpkinetica.wasm`.
 
 3. Add the WASM file's SHA-256 hash to `plugins/permission_cache.json`.
 
@@ -48,7 +48,7 @@ wasm-tools component new target/wasm32-wasip1/release/pschematics.wasm \
 
 ## Configuration
 
-Config file: `plugins/pschematics/config.json`
+Config file: `plugins/pumpkinetica/config.json`
 
 ```json
 {
@@ -66,7 +66,7 @@ Config file: `plugins/pschematics/config.json`
 
 ## Usage
 
-1. Place schematic files in `plugins/pschematics/schematics/`
+1. Place schematic files in `plugins/pumpkinetica/schematics/`
 2. In-game: `/schematic list` to see available files
 3. `/schematic load mybuilding.litematica`
 4. Stand where you want the origin point

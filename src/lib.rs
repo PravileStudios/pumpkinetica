@@ -34,13 +34,13 @@ use selection::Selection;
 
 // ── Plugin ──────────────────────────────────────────────────────────
 
-const PLUGIN_NAME: &str = "pschematics";
+const PLUGIN_NAME: &str = "pumpkinetica";
 pub(crate) const PLUGIN_VERSION: &str = "0.5.0";
-const PREFIX: &str = "[PSchematics] ";
+const PREFIX: &str = "[Pumpkinetica] ";
 
-struct PSchematics;
+struct Pumpkinetica;
 
-register_plugin!(PSchematics);
+register_plugin!(Pumpkinetica);
 
 pub(crate) static CONFIG: Mutex<Option<PluginConfig>> = Mutex::new(None);
 pub(crate) static ACTIVE_PASTES: AtomicUsize = AtomicUsize::new(0);
@@ -49,9 +49,9 @@ pub(crate) static PLAYER_CLIPBOARDS: Mutex<Option<HashMap<String, Clipboard>>> =
 pub(crate) static PLAYER_HISTORIES: Mutex<Option<HashMap<String, PlayerHistory>>> =
     Mutex::new(None);
 
-impl Plugin for PSchematics {
+impl Plugin for Pumpkinetica {
     fn new() -> Self {
-        PSchematics
+        Pumpkinetica
     }
 
     fn metadata(&self) -> PluginMetadata {

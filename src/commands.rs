@@ -371,7 +371,7 @@ impl CommandHandler for HelpHandler {
         _server: Server,
         _args: ConsumedArgs,
     ) -> Result<i32, CommandError> {
-        sender.send_message(msg_info(&format!("PSchematics v{PLUGIN_VERSION}")));
+        sender.send_message(msg_info(&format!("Pumpkinetica v{PLUGIN_VERSION}")));
 
         let cmds = [
             ("/schem load <file>", "Load a schematic file"),
