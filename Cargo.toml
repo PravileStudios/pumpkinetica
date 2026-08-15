@@ -1,0 +1,16 @@
+[package]
+name = "pumpkinetica"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+authors = ["Indrajeeth"]
+repository = "https://github.com/PravileStudios/pumpkinetica"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpkin-plugin-api = { git = "https://github.com/Pumpkin-MC/Pumpkin", rev = "c10341b80fc0f177ae01c1ca42f8b088222b7b5e" }
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

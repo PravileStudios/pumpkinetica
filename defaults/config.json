@@ -1,0 +1,10 @@
+{
+  "fallback_block": "minecraft:cobblestone",
+  "blocks_per_tick": 4096,
+  "max_concurrent_pastes": 4,
+  "wand_item": "minecraft:wooden_axe",
+  "max_undo_history": 20,
+  "max_selection_volume": 10000000,
+  "max_undo_volume": 1000000,
+  "debug": false
+}

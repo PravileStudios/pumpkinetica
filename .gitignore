@@ -1,0 +1,4 @@
+/target
+*.wasm
+deploy.sh
+build_remote.sh
