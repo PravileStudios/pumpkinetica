@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Pumpkin (plugin API dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: Pumpkin-MC/Pumpkin
+          path: ../Pumpkin
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-wasip1
+
+      - name: Install wasm-tools
+        run: cargo install wasm-tools
+
+      - name: Build
+        run: cargo build --target wasm32-wasip1 --release
+
+      - name: Download WASI adapter
+        run: curl -LO https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.0/wasi_snapshot_preview1.reactor.wasm
+
+      - name: Componentize
+        run: |
+          wasm-tools component new \
+            target/wasm32-wasip1/release/pumpkinetica.wasm \
+            -o pumpkinetica.wasm \
+            --adapt wasi_snapshot_preview1.reactor.wasm
+
+      - name: Compute SHA-256
+        run: |
+          sha256sum pumpkinetica.wasm | tee pumpkinetica.wasm.sha256
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pumpkinetica.wasm
+            pumpkinetica.wasm.sha256
+          generate_release_notes: true
+          body: |
+            WASM component plugin for Pumpkin MC.
+
+            **Install:** drop `pumpkinetica.wasm` into your server's `plugins/` directory, then add the SHA-256 below to `plugins/permission_cache.json`.
+
+            SHA-256 is attached as `pumpkinetica.wasm.sha256`.
