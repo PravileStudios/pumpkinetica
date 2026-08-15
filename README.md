@@ -99,4 +99,9 @@ Adding a new config key? Existing `config.json` files keep their values — new 
 
 ## License
 
-MIT
+Copyright (c) 2026 Indrajeeth.
+
+Licensed under the [GNU AGPL-3.0](LICENSE). You may use, fork, and modify this
+plugin, but any distributed or network-hosted version must remain open source
+under the same license and keep attribution — it can't be turned into a closed,
+proprietary product.

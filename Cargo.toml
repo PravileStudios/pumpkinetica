@@ -2,6 +2,9 @@
 name = "pumpkinetica"
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0-only"
+authors = ["Indrajeeth"]
+repository = "https://github.com/IndrajeethY/pschematics"
 
 [lib]
 crate-type = ["cdylib"]
