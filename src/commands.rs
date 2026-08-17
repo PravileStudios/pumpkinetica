@@ -25,7 +25,7 @@ use crate::{
     resolve_palette,
 };
 
-fn is_safe_filename(name: &str) -> bool {
+pub(crate) fn is_safe_filename(name: &str) -> bool {
     !name.is_empty()
         && !name.contains('/')
         && !name.contains('\\')

@@ -1,6 +1,7 @@
 mod clipboard;
 mod commands;
 mod history;
+mod ipc;
 mod parser;
 mod paste;
 mod selection;
@@ -43,6 +44,7 @@ struct Pumpkinetica;
 register_plugin!(Pumpkinetica);
 
 pub(crate) static CONFIG: Mutex<Option<PluginConfig>> = Mutex::new(None);
+pub(crate) static SCHEMATICS_DIR: Mutex<Option<String>> = Mutex::new(None);
 pub(crate) static ACTIVE_PASTES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PLAYER_SELECTIONS: Mutex<Option<HashMap<String, Selection>>> = Mutex::new(None);
 pub(crate) static PLAYER_CLIPBOARDS: Mutex<Option<HashMap<String, Clipboard>>> = Mutex::new(None);
@@ -74,6 +76,7 @@ impl Plugin for Pumpkinetica {
         let _ = std::fs::create_dir_all(&schematics_dir);
         let config = load_config(&data_folder);
         *CONFIG.lock().unwrap() = Some(config);
+        *SCHEMATICS_DIR.lock().unwrap() = Some(schematics_dir.clone());
 
         *PLAYER_SELECTIONS.lock().unwrap() = Some(HashMap::new());
         *PLAYER_CLIPBOARDS.lock().unwrap() = Some(HashMap::new());
@@ -188,6 +191,14 @@ impl Plugin for Pumpkinetica {
 
         Ok(())
     }
+
+    fn handle_ipc_message(
+        &mut self,
+        sender: String,
+        message: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        ipc::dispatch(&sender, &message)
+    }
 }
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -275,6 +286,10 @@ pub(crate) fn load_config(data_folder: &str) -> PluginConfig {
 
 pub(crate) fn get_config() -> PluginConfig {
     CONFIG.lock().unwrap().clone().unwrap_or_default()
+}
+
+pub(crate) fn schematics_dir() -> Option<String> {
+    SCHEMATICS_DIR.lock().unwrap().clone()
 }
 
 // Emit a diagnostic line to the server console when debug mode is on.
