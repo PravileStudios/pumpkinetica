@@ -15,12 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout Pumpkin (plugin API dependency)
-        uses: actions/checkout@v4
-        with:
-          repository: Pumpkin-MC/Pumpkin
-          path: ../Pumpkin
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
@@ -36,7 +30,7 @@ jobs:
         run: cargo build --target wasm32-wasip1 --release
 
       - name: Download WASI adapter
-        run: curl -LO https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.0/wasi_snapshot_preview1.reactor.wasm
+        run: curl -Lo wasi_snapshot_preview1.reactor.wasm https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.0/wasi_snapshot_preview1.reactor.wasm
 
       - name: Componentize
         run: |
@@ -46,8 +40,7 @@ jobs:
             --adapt wasi_snapshot_preview1.reactor.wasm
 
       - name: Compute SHA-256
-        run: |
-          sha256sum pumpkinetica.wasm | tee pumpkinetica.wasm.sha256
+        run: sha256sum pumpkinetica.wasm | tee pumpkinetica.wasm.sha256
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

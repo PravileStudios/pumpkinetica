@@ -192,11 +192,7 @@ impl Plugin for Pumpkinetica {
         Ok(())
     }
 
-    fn handle_ipc_message(
-        &mut self,
-        sender: String,
-        message: Vec<u8>,
-    ) -> Result<Vec<u8>, String> {
+    fn handle_ipc_message(&mut self, sender: String, message: Vec<u8>) -> Result<Vec<u8>, String> {
         ipc::dispatch(&sender, &message)
     }
 }
@@ -224,6 +220,16 @@ pub(crate) struct PluginConfig {
     /// When true, emit diagnostic log lines to the server console.
     #[serde(default = "default_debug")]
     pub debug: bool,
+    /// When true, IPC callers may paste from absolute host paths (see
+    /// `ipc_allowed_paste_dirs`). Off by default: without it, IPC paste is
+    /// restricted to files inside the plugin's own schematics directory.
+    #[serde(default = "default_ipc_allow_external_paths")]
+    pub ipc_allow_external_paths: bool,
+    /// Directories an IPC-supplied path must resolve inside for a paste to be
+    /// accepted. Both the path and each root are canonicalized (symlinks and
+    /// `..` collapsed) before the prefix check. Empty = deny all external paths.
+    #[serde(default)]
+    pub ipc_allowed_paste_dirs: Vec<String>,
 }
 
 fn default_fallback_block() -> String {
@@ -250,6 +256,9 @@ fn default_max_undo_volume() -> u64 {
 fn default_debug() -> bool {
     false
 }
+fn default_ipc_allow_external_paths() -> bool {
+    false
+}
 
 impl Default for PluginConfig {
     fn default() -> Self {
@@ -262,6 +271,8 @@ impl Default for PluginConfig {
             max_selection_volume: default_max_selection_volume(),
             max_undo_volume: default_max_undo_volume(),
             debug: default_debug(),
+            ipc_allow_external_paths: default_ipc_allow_external_paths(),
+            ipc_allowed_paste_dirs: Vec::new(),
         }
     }
 }
