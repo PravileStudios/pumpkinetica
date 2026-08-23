@@ -1,6 +1,6 @@
 [package]
 name = "pumpkinetica"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["Indrajeeth"]
@@ -15,7 +15,7 @@ exclude = ["examples/ipc-tester"]
 crate-type = ["cdylib"]
 
 [dependencies]
-pumpkin-plugin-api = { git = "https://github.com/Pumpkin-MC/Pumpkin", rev = "5b833274d46b50a519d6b4e532a7b44f05447c64" }
+pumpkin-plugin-api = { git = "https://github.com/Pumpkin-MC/Pumpkin", rev = "4c710006130643e6fb82aa46c5665271afc3b912" }
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

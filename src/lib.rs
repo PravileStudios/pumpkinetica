@@ -36,7 +36,7 @@ use selection::Selection;
 // ── Plugin ──────────────────────────────────────────────────────────
 
 const PLUGIN_NAME: &str = "pumpkinetica";
-pub(crate) const PLUGIN_VERSION: &str = "0.5.0";
+pub(crate) const PLUGIN_VERSION: &str = "0.2.0";
 const PREFIX: &str = "[Pumpkinetica] ";
 
 struct Pumpkinetica;
