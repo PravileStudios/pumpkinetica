@@ -10,5 +10,5 @@ description = "Example plugin that drives Pumpkinetica over plugin IPC"
 crate-type = ["cdylib"]
 
 [dependencies]
-pumpkin-plugin-api = { git = "https://github.com/Pumpkin-MC/Pumpkin", rev = "5b833274d46b50a519d6b4e532a7b44f05447c64" }
+pumpkin-plugin-api = { git = "https://github.com/Pumpkin-MC/Pumpkin", rev = "4c710006130643e6fb82aa46c5665271afc3b912" }
 serde_json = "1"
