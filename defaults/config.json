@@ -6,5 +6,7 @@
   "max_undo_history": 20,
   "max_selection_volume": 10000000,
   "max_undo_volume": 1000000,
-  "debug": false
+  "debug": false,
+  "ipc_allow_external_paths": false,
+  "ipc_allowed_paste_dirs": []
 }
