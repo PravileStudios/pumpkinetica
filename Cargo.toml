@@ -15,7 +15,7 @@ exclude = ["examples/ipc-tester"]
 crate-type = ["cdylib"]
 
 [dependencies]
-pumpkin-plugin-api = { git = "https://github.com/Pumpkin-MC/Pumpkin", rev = "4c710006130643e6fb82aa46c5665271afc3b912" }
+pumpkin-plugin-api = { git = "https://github.com/Pumpkin-MC/Pumpkin", rev = "2be3e8be8823b2b79d716a6933e35f6730f95b05" }
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

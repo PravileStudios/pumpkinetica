@@ -101,84 +101,65 @@ impl Plugin for Pumpkinetica {
 
         // ── Command tree ────────────────────────────────────────────
 
-        let file_arg = CommandNode::argument("file", &ArgumentType::String(StringType::SingleWord))
-            .execute(LoadHandler {
-                schematics_dir: schematics_dir.clone(),
-            });
-        let load_node = CommandNode::literal("load");
-        load_node.then(file_arg);
+        let load_node = CommandNode::literal("load").then(
+            CommandNode::argument("file", &ArgumentType::String(StringType::SingleWord))
+                .execute(LoadHandler {
+                    schematics_dir: schematics_dir.clone(),
+                }),
+        );
 
-        let paste_node = CommandNode::literal("paste").execute(PasteHandler);
+        let save_node = CommandNode::literal("save").then(
+            CommandNode::argument("name", &ArgumentType::String(StringType::SingleWord))
+                .execute(SaveHandler { schematics_dir: schematics_dir.clone() }),
+        );
 
-        let list_node = CommandNode::literal("list").execute(ListHandler {
-            schematics_dir: schematics_dir.clone(),
-        });
-
-        let info_node = CommandNode::literal("info").execute(InfoHandler);
-        let status_node = CommandNode::literal("status").execute(StatusHandler);
-        let reload_node = CommandNode::literal("reload").execute(ReloadHandler { data_folder });
-        let help_node = CommandNode::literal("help").execute(HelpHandler);
-
-        let pos1_node = CommandNode::literal("pos1").execute(Pos1Handler);
-        let pos2_node = CommandNode::literal("pos2").execute(Pos2Handler);
-        let wand_node = CommandNode::literal("wand").execute(WandHandler);
-        let copy_node = CommandNode::literal("copy").execute(CopyHandler);
-
-        let save_arg = CommandNode::argument("name", &ArgumentType::String(StringType::SingleWord))
-            .execute(SaveHandler { schematics_dir });
-        let save_node = CommandNode::literal("save");
-        save_node.then(save_arg);
-
-        let rotate_arg =
+        let rotate_node = CommandNode::literal("rotate").then(
             CommandNode::argument("degrees", &ArgumentType::String(StringType::SingleWord))
-                .execute(RotateHandler);
-        let rotate_node = CommandNode::literal("rotate");
-        rotate_node.then(rotate_arg);
+                .execute(RotateHandler),
+        );
 
-        let flip_arg = CommandNode::argument("axis", &ArgumentType::String(StringType::SingleWord))
-            .execute(FlipHandler);
-        let flip_node = CommandNode::literal("flip");
-        flip_node.then(flip_arg);
+        let flip_node = CommandNode::literal("flip").then(
+            CommandNode::argument("axis", &ArgumentType::String(StringType::SingleWord))
+                .execute(FlipHandler),
+        );
 
-        let undo_node = CommandNode::literal("undo").execute(UndoHandler);
-        let redo_node = CommandNode::literal("redo").execute(RedoHandler);
+        let replace_node = CommandNode::literal("replace").then(
+            CommandNode::argument("from", &ArgumentType::String(StringType::SingleWord)).then(
+                CommandNode::argument("to", &ArgumentType::String(StringType::SingleWord))
+                    .execute(ReplaceHandler),
+            ),
+        );
 
-        let replace_to = CommandNode::argument("to", &ArgumentType::String(StringType::SingleWord))
-            .execute(ReplaceHandler);
-        let replace_from =
-            CommandNode::argument("from", &ArgumentType::String(StringType::SingleWord));
-        replace_from.then(replace_to);
-        let replace_node = CommandNode::literal("replace");
-        replace_node.then(replace_from);
-
-        let set_arg = CommandNode::argument("block", &ArgumentType::String(StringType::SingleWord))
-            .execute(SetHandler);
-        let set_node = CommandNode::literal("set");
-        set_node.then(set_arg);
+        let set_node = CommandNode::literal("set").then(
+            CommandNode::argument("block", &ArgumentType::String(StringType::SingleWord))
+                .execute(SetHandler),
+        );
 
         let cmd = Command::new(
             &["schematic".into(), "schem".into()],
             "Load and paste .litematica and .schem schematics",
-        );
-        let cmd = cmd.execute(HelpHandler);
-        cmd.then(load_node);
-        cmd.then(paste_node);
-        cmd.then(list_node);
-        cmd.then(info_node);
-        cmd.then(status_node);
-        cmd.then(reload_node);
-        cmd.then(help_node);
-        cmd.then(pos1_node);
-        cmd.then(pos2_node);
-        cmd.then(wand_node);
-        cmd.then(copy_node);
-        cmd.then(save_node);
-        cmd.then(rotate_node);
-        cmd.then(flip_node);
-        cmd.then(undo_node);
-        cmd.then(redo_node);
-        cmd.then(replace_node);
-        cmd.then(set_node);
+        )
+        .execute(HelpHandler)
+        .then(load_node)
+        .then(CommandNode::literal("paste").execute(PasteHandler))
+        .then(CommandNode::literal("list").execute(ListHandler {
+            schematics_dir: schematics_dir.clone(),
+        }))
+        .then(CommandNode::literal("info").execute(InfoHandler))
+        .then(CommandNode::literal("status").execute(StatusHandler))
+        .then(CommandNode::literal("reload").execute(ReloadHandler { data_folder }))
+        .then(CommandNode::literal("help").execute(HelpHandler))
+        .then(CommandNode::literal("pos1").execute(Pos1Handler))
+        .then(CommandNode::literal("pos2").execute(Pos2Handler))
+        .then(CommandNode::literal("wand").execute(WandHandler))
+        .then(CommandNode::literal("copy").execute(CopyHandler))
+        .then(save_node)
+        .then(rotate_node)
+        .then(flip_node)
+        .then(CommandNode::literal("undo").execute(UndoHandler))
+        .then(CommandNode::literal("redo").execute(RedoHandler))
+        .then(replace_node)
+        .then(set_node);
 
         let _ = context.register_permission(&Permission {
             node: format!("{PLUGIN_NAME}:command.schematic"),
@@ -317,12 +298,9 @@ pub(crate) fn debug_log(msg: &str) {
 // ── Messaging ───────────────────────────────────────────────────────
 
 fn msg(text: &str, color: NamedColor) -> TextComponent {
-    let prefix = TextComponent::text(PREFIX);
-    prefix.color_named(NamedColor::Gold);
-    let body = TextComponent::text(text);
-    body.color_named(color);
-    prefix.add_child(body);
-    prefix
+    TextComponent::text(PREFIX)
+        .color_named(NamedColor::Gold)
+        .add_child(TextComponent::text(text).color_named(color))
 }
 
 pub(crate) fn msg_error(text: &str) -> TextComponent {

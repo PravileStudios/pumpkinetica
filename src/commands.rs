@@ -289,8 +289,7 @@ impl CommandHandler for ListHandler {
             let header = msg_info(&format!("Available schematics ({}):", files.len()));
             sender.send_message(header);
             for file in &files {
-                let entry = TextComponent::text(&format!("  - {file}"));
-                entry.color_named(NamedColor::Gray);
+                let entry = TextComponent::text(&format!("  - {file}")).color_named(NamedColor::Gray);
                 sender.send_message(entry);
             }
         }
@@ -329,8 +328,8 @@ impl CommandHandler for InfoHandler {
             clip.size_z,
             non_air,
             clip.tile_entities.len(),
-        ));
-        detail.color_named(NamedColor::Gray);
+        ))
+        .color_named(NamedColor::Gray);
         sender.send_message(detail);
 
         Ok(0)
@@ -393,11 +392,9 @@ impl CommandHandler for HelpHandler {
         ];
 
         for (cmd, desc) in &cmds {
-            let line = TextComponent::text(&format!("  {cmd}"));
-            line.color_named(NamedColor::Green);
-            let detail = TextComponent::text(&format!(" - {desc}"));
-            detail.color_named(NamedColor::Gray);
-            line.add_child(detail);
+            let line = TextComponent::text(&format!("  {cmd}"))
+                .color_named(NamedColor::Green)
+                .add_child(TextComponent::text(&format!(" - {desc}")).color_named(NamedColor::Gray));
             sender.send_message(line);
         }
 
