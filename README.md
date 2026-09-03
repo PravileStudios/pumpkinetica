@@ -61,19 +61,17 @@ wasm-tools component new target/wasm32-wasip1/release/pumpkinetica.wasm \
 
 ## Configuration
 
-Config file: `plugins/data/pumpkinetica/config.json`
+Config file: `plugins/data/pumpkinetica/config.toml`
 
-```json
-{
-  "fallback_block": "minecraft:cobblestone",
-  "blocks_per_tick": 4096,
-  "max_concurrent_pastes": 4,
-  "wand_item": "minecraft:wooden_axe",
-  "max_undo_history": 20,
-  "max_selection_volume": 10000000,
-  "max_undo_volume": 1000000,
-  "debug": false
-}
+```toml
+fallback_block = "minecraft:cobblestone"
+blocks_per_tick = 4096
+max_concurrent_pastes = 4
+wand_item = "minecraft:wooden_axe"
+max_undo_history = 20
+max_selection_volume = 10000000
+max_undo_volume = 1000000
+debug = false
 ```
 
 | Option | Default | Description |
@@ -87,7 +85,7 @@ Config file: `plugins/data/pumpkinetica/config.json`
 | `max_undo_volume` | `1000000` | Operations larger than this skip undo recording (bounds memory). |
 | `debug` | `false` | Enable server-side diagnostic logging. |
 
-Adding a new config key? Existing `config.json` files keep their values — new keys fall back to defaults in memory but aren't written back automatically.
+Adding a new config key? Existing `config.toml` files keep their values — new keys fall back to defaults in memory but aren't written back automatically.
 
 ## Usage
 

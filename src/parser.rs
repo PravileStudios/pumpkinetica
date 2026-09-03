@@ -28,11 +28,16 @@ fn remaining(cursor: &Cursor<&[u8]>) -> usize {
 }
 
 fn checked_len(raw: i32, cursor: &Cursor<&[u8]>) -> Result<usize, String> {
+    checked_len_scaled(raw, 1, cursor)
+}
+
+fn checked_len_scaled(raw: i32, element_bytes: usize, cursor: &Cursor<&[u8]>) -> Result<usize, String> {
     if raw < 0 {
         return Err("Negative NBT length".into());
     }
     let len = raw as usize;
-    if len > remaining(cursor) {
+    let needed = len.checked_mul(element_bytes).ok_or("NBT length overflow")?;
+    if needed > remaining(cursor) {
         return Err("NBT length exceeds remaining data".into());
     }
     Ok(len)
@@ -309,7 +314,7 @@ fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8, depth: u32) -> Result<NbtV
         }
         10 => read_compound(cursor, depth + 1),
         11 => {
-            let len = checked_len(read_i32(cursor)?, cursor)?;
+            let len = checked_len_scaled(read_i32(cursor)?, 4, cursor)?;
             let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
                 arr.push(read_i32(cursor)?);
@@ -317,7 +322,7 @@ fn read_tag(cursor: &mut Cursor<&[u8]>, tag_type: u8, depth: u32) -> Result<NbtV
             Ok(NbtValue::IntArray(arr))
         }
         12 => {
-            let len = checked_len(read_i32(cursor)?, cursor)?;
+            let len = checked_len_scaled(read_i32(cursor)?, 8, cursor)?;
             let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
                 arr.push(read_i64(cursor)?);

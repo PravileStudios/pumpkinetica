@@ -36,7 +36,7 @@ use selection::Selection;
 // ── Plugin ──────────────────────────────────────────────────────────
 
 const PLUGIN_NAME: &str = "pumpkinetica";
-pub(crate) const PLUGIN_VERSION: &str = "0.2.0";
+pub(crate) const PLUGIN_VERSION: &str = "0.3.0";
 const PREFIX: &str = "[Pumpkinetica] ";
 
 struct Pumpkinetica;
@@ -260,21 +260,33 @@ impl Default for PluginConfig {
 
 fn write_default_config(path: &str) -> PluginConfig {
     let config = PluginConfig::default();
-    if let Ok(json) = serde_json::to_string_pretty(&config) {
-        let _ = std::fs::write(path, json);
+    if let Ok(toml_str) = toml::to_string_pretty(&config) {
+        let _ = std::fs::write(path, toml_str);
     }
     config
 }
 
 pub(crate) fn load_config(data_folder: &str) -> PluginConfig {
-    let path = format!("{}/config.json", data_folder);
-    match std::fs::read_to_string(&path) {
-        // A malformed file falls back to defaults in memory but is left on disk
-        // so a stray typo can't wipe the user's settings.
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+    let path = format!("{}/config.toml", data_folder);
+    let mut config = match std::fs::read_to_string(&path) {
+        Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
         Err(_) => write_default_config(&path),
+    };
+    config.clamp();
+    config
+}
+
+impl PluginConfig {
+    fn clamp(&mut self) {
+        self.blocks_per_tick = self.blocks_per_tick.clamp(1, 1_000_000);
+        self.max_concurrent_pastes = self.max_concurrent_pastes.clamp(1, 256);
+        self.max_undo_history = self.max_undo_history.min(1000);
+        self.max_selection_volume = self.max_selection_volume.min(MAX_SELECTION_CAP);
+        self.max_undo_volume = self.max_undo_volume.min(MAX_SELECTION_CAP);
     }
 }
+
+const MAX_SELECTION_CAP: u64 = 500_000_000;
 
 pub(crate) fn get_config() -> PluginConfig {
     CONFIG.lock().unwrap().clone().unwrap_or_default()

@@ -98,7 +98,6 @@ pub(crate) fn schedule_block_op(
     let task_id_clone = task_id.clone();
     let mut description_owned = Some(description.clone());
     let mut dimension_owned = Some(dimension.clone());
-    let player_name_owned = Some(player_name.clone());
 
     let id = pumpkin_plugin_api::scheduler::schedule_repeating_task(0, 1, move |server| {
         let mut s = state_clone.lock().unwrap();
@@ -189,7 +188,7 @@ pub(crate) fn schedule_block_op(
                     new_states: std::mem::take(&mut s.new_snapshots),
                 };
                 if let Some(ref mut histories) = *PLAYER_HISTORIES.lock().unwrap() {
-                    let pname = player_name_owned.clone().unwrap_or_default();
+                    let pname = player_name.clone();
                     let history = histories.entry(pname).or_insert_with(PlayerHistory::new);
                     history.push_undo(entry, config.max_undo_history);
                 }

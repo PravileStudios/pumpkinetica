@@ -35,7 +35,7 @@ red = protocol failure or target unreachable.
 
 ## Testing external paths
 
-1. In `plugins/data/pumpkinetica/config.json` set `ipc_allow_external_paths: true`
+1. In `plugins/data/pumpkinetica/config.toml` set `ipc_allow_external_paths = true`
    and add a dir to `ipc_allowed_paste_dirs`, e.g. `["/srv/shared/builds"]`.
 2. `/schematic reload` (or restart) so pumpkinetica picks up the config.
 3. `/pptest pastepath /srv/shared/builds/castle.schem` — expect `ok:true`.
