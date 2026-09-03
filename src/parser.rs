@@ -31,12 +31,18 @@ fn checked_len(raw: i32, cursor: &Cursor<&[u8]>) -> Result<usize, String> {
     checked_len_scaled(raw, 1, cursor)
 }
 
-fn checked_len_scaled(raw: i32, element_bytes: usize, cursor: &Cursor<&[u8]>) -> Result<usize, String> {
+fn checked_len_scaled(
+    raw: i32,
+    element_bytes: usize,
+    cursor: &Cursor<&[u8]>,
+) -> Result<usize, String> {
     if raw < 0 {
         return Err("Negative NBT length".into());
     }
     let len = raw as usize;
-    let needed = len.checked_mul(element_bytes).ok_or("NBT length overflow")?;
+    let needed = len
+        .checked_mul(element_bytes)
+        .ok_or("NBT length overflow")?;
     if needed > remaining(cursor) {
         return Err("NBT length exceeds remaining data".into());
     }

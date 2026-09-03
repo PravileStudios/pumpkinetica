@@ -102,15 +102,19 @@ impl Plugin for Pumpkinetica {
         // ── Command tree ────────────────────────────────────────────
 
         let load_node = CommandNode::literal("load").then(
-            CommandNode::argument("file", &ArgumentType::String(StringType::SingleWord))
-                .execute(LoadHandler {
+            CommandNode::argument("file", &ArgumentType::String(StringType::SingleWord)).execute(
+                LoadHandler {
                     schematics_dir: schematics_dir.clone(),
-                }),
+                },
+            ),
         );
 
         let save_node = CommandNode::literal("save").then(
-            CommandNode::argument("name", &ArgumentType::String(StringType::SingleWord))
-                .execute(SaveHandler { schematics_dir: schematics_dir.clone() }),
+            CommandNode::argument("name", &ArgumentType::String(StringType::SingleWord)).execute(
+                SaveHandler {
+                    schematics_dir: schematics_dir.clone(),
+                },
+            ),
         );
 
         let rotate_node = CommandNode::literal("rotate").then(
